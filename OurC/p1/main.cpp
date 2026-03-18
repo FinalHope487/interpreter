@@ -639,20 +639,20 @@ int main() {
     // cin.tie(0);
     cout << "Program starts..." << endl;
 
-    // ifstream file("test/data.txt"); // 本機測試
-    // stringstream ss;
-    // ss << file.rdbuf(); // 將整個檔案緩衝區讀入 stringstream
-    // string content_ = ss.str();
-    // auto start = content_.find_first_of("\n") + 1, end = content_.length();
-    // string content = content_.substr(start, end - start + 1);
+    ifstream file("test/data.txt"); // 本機測試
+    stringstream ss;
+    ss << file.rdbuf(); // 將整個檔案緩衝區讀入 stringstream
+    string content_ = ss.str();
+    auto start = content_.find_first_of("\n") + 1, end = content_.length();
+    string content = content_.substr(start, end - start + 1);
 
-    string content, _; // 上傳測試
-    cin >> _; // 去除題號
+    // string content, _; // 上傳測試
+    // cin >> _; // 去除題號
 
-    char c;
-    while (cin.get(c)) {
-        content += c;
-    }
+    // char c;
+    // while (cin.get(c)) {
+    //     content += c;
+    // }
 
     auto cmds = split_by_semicolon(content);
 

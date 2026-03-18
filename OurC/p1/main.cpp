@@ -10,8 +10,6 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
-#include <fstream>
-#include <sstream>
 // #include <iterator>
 // #include <map>
 // #include <optional>
@@ -27,6 +25,7 @@ const double ErrorValue = 1e-4;
 
 enum TokenType {
     Number,
+    Point, // 小數後部分包含小數點 .1234 
     Ident,
     Str,
     Chr,
@@ -184,12 +183,18 @@ private:
             idx += 3;
             return {TokenType::Chr, chr_str};
 
-        // num (處理數字後緊鄰英文字母或底線 浮點數出現兩次的行為)
-        } else if (isdigit(text[idx])) {
+        // num (以小數點切割)
+        } else if (isdigit(text[idx]) || text[idx] == '.') {
             string num_str;
+            bool is_f = false;
+            if (text[idx] == '.') is_f = true;
             while (idx < text.length() && (isdigit(text[idx]) || text[idx] == '.')) {
                 num_str += text[idx];
                 idx++;
+                if (idx < text.length() && text[idx] == '.') {
+                    if (is_f) return {TokenType::Point, num_str};
+                    else return {TokenType::Number, num_str};
+                }
             }
             return {TokenType::Number, num_str};
         
@@ -342,7 +347,8 @@ private:
 
         if (cur_token.val == "(") {
             next();
-            (is_return_bool) ? val = parse_bool_exp() : val = parse_exp();
+            // (is_return_bool) ? val = parse_bool_exp() : val = parse_exp();
+            val = parse_exp();
             if (cur_token.val == ")") {
                 next();
             } else {
@@ -370,28 +376,9 @@ private:
             } else if (cur_token.type == TokenType::Ident) {
                 token id_token = cur_token;
                 next(); // 通過測試
-                if (cur_token.val == ":=") {
-                    // 賦值
-                    next(); // 成功代表後接著合法字元
-                    
-                    // 需要修改架構以有效偵測型別
-                    if (is_return_bool) {
-                        val = parse_bool_exp();
-                        ident_table[id_token.val] = variable{DataType::Bool, to_string(val)};
+                // 取值
+                val = stod(ident_table[id_token.val].val);
 
-                    } else {
-                        val = parse_exp();
-                        if (is_float(val)) {
-                            ident_table[id_token.val] = variable{DataType::Float, to_string(val)};
-                        } else {
-                            ident_table[id_token.val] = variable{DataType::Int, to_string(val)};
-                        }
-                    }
-
-                } else {
-                    // 取值
-                    val = stod(ident_table[id_token.val].val);
-                }
             } else {
                 if (symbols.find(cur_token.val) == symbols.end()) { // not found
                     throw runtime_error("> Unrecognized token with first char : '" + cur_token.val + "'");
@@ -406,9 +393,9 @@ private:
     double parse_term() {
         // *, /
         double val = parse_factor();
-        if (cur_token.type == TokenType::EndOfFile) return val;
+        // if (cur_token.type == TokenType::EndOfFile) return val;
 
-        while (cur_token.type != TokenType::EndOfFile && is_in(cur_token.val, {"*", "/"})) {
+        while (is_in(cur_token.val, {"*", "/"})) {
             if (cur_token.val == "*") {
                 next();
                 val = val * parse_factor();
@@ -426,10 +413,10 @@ private:
     double parse_exp() {
         // +, -
         double val = parse_term();
-        if (cur_token.type == TokenType::EndOfFile) return val;
+        // if (cur_token.type == TokenType::EndOfFile) return val;
         
         // cout << "prev: " + prev_token.val + " | cur: " + cur_token.val << endl;
-        while (cur_token.type != TokenType::EndOfFile && is_in(cur_token.val, {"+", "-"})) {
+        while (is_in(cur_token.val, {"+", "-"})) {
             if (cur_token.val == "+") {
                 next();
                 val = val + parse_term();
@@ -447,10 +434,7 @@ private:
         double val = parse_exp();
         if (cur_token.type == TokenType::EndOfFile) return val;
         
-        while (cur_token.type != TokenType::EndOfFile 
-               && is_in(cur_token.val, {
-                "==", "<=", ">=", "<>", 
-                "&&", "||", "<", ">"})) {
+        while (is_in(cur_token.val, {"==", "<=", ">=", "<>", "&&", "||", "<", ">"})) {
             if (cur_token.val == "==") {
                 next();
                 val = val == parse_exp();
@@ -479,13 +463,20 @@ private:
         }
         return val;
     } 
-    double parse_statement(){
 
+    double parse_statement() {
+        double val = parse_exp();
+        if (is_float(val)) {
+            ident_table[cur_token.val] = variable{DataType::Float, to_string(val)};
+        } else {
+            ident_table[cur_token.val] = variable{DataType::Int, to_string(val)};
+        }
+        return val;
     }
 
 public:
-    bool is_return_bool;
-    Parser(const string& input) : lexer(input), is_return_bool(false) {
+    // bool is_return_bool;
+    Parser(const string& input) : lexer(input) {
         cur_token = lexer.get_next_token();
         prev_token = {TokenType::Null, "-1"};
     }
@@ -495,40 +486,50 @@ public:
     }
 
     void parse_cmd() {
-        vector<string> ops = {"==", "<=", ">=", "<>", "&&", "||", "<", ">"};
-        auto tokens = lexer.traverse();
-        for (int i = 0; i < tokens.size(); i++) {
-            for (int j = 0; j < ops.size(); j++) {
-                if (tokens[i].val == ops[j]) {
-                    is_return_bool = true;
-                }
-            }
-        }
+        // statement | bool_exp | exp 
+        // first token
+        // statement
+        if (cur_token.type == TokenType::Ident && lexer.peek_token().val == ":=") {
+            next();
+            next();
+            parse_statement();
 
-        if (is_return_bool) {
-            bool result = parse_bool_exp();
-            if (result) {
-                cout << "> true" << endl;
-            } else {
-                cout << "> false" << endl;
-            }
-            if (cur_token.type != TokenType::Semicolon) {
-                if (is_in(cur_token.val, symbols)){
-                    throw runtime_error("> Unexpected token : '" + cur_token.val + "'");
-                } else {
-                    throw runtime_error("> Unrecognized token with first char : '" + cur_token.val + "'");
-                }
-            }
         } else {
-            double result = parse_exp();
-            if (cur_token.type != TokenType::Semicolon) {
-                if (is_in(cur_token.val, symbols)){
-                    throw runtime_error("> Unexpected token : '" + cur_token.val + "'");
-                } else {
-                    throw runtime_error("> Unrecognized token with first char : '" + cur_token.val + "'");
+            bool is_return_bool = false;
+            auto tokens = lexer.traverse();
+            for (int i = 0; i < tokens.size(); i++) {
+                if (is_in(tokens[i].val, {"==", "<=", ">=", "<>", "&&", "||", "<", ">"})) {
+                    is_return_bool = true;
+                    break;
                 }
             }
-            cout << "> " << result << endl;
+            // bool exp
+            if (is_return_bool) {
+                bool result = parse_bool_exp();
+                if (cur_token.type != TokenType::Semicolon) {
+                    if (is_in(cur_token.val, symbols)){
+                        throw runtime_error("> Unexpected token : '" + cur_token.val + "'");
+                    } else {
+                        throw runtime_error("> Unrecognized token with first char : '" + cur_token.val + "'");
+                    }
+                }
+                if (result) {
+                    cout << "> true" << endl;
+                } else {
+                    cout << "> false" << endl;
+                }
+            // exp
+            } else {
+                double result = parse_exp();
+                if (cur_token.type != TokenType::Semicolon) {
+                    if (is_in(cur_token.val, symbols)){
+                        throw runtime_error("> Unexpected token : '" + cur_token.val + "'");
+                    } else {
+                        throw runtime_error("> Unrecognized token with first char : '" + cur_token.val + "'");
+                    }
+                }
+                cout << "> " << result << endl;
+            }
         }
     }
 
@@ -618,8 +619,6 @@ void parse_wrapper(string cmd) {
     try {
         if (cmd.length() > 0) {
             parser.parse_cmd();
-        } else { // 初次輸入長度為0則報錯
-            cout << "> Unexpected token : ';'" << endl; 
         }
 
     } catch (const std::exception& e) {
@@ -631,6 +630,9 @@ void parse_wrapper(string cmd) {
         }
     }
 }
+
+#include <fstream>
+#include <sstream>
 
 int main() {
     // ios::sync_with_stdio(false);

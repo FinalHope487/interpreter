@@ -265,7 +265,7 @@ public:
         string result;
         if (this->type == DataType::Int && var2.type == DataType::Int) {
             if (var2.val == "0") {
-                throw runtime_error("Error in operator/");
+                throw runtime_error("Error"); // 為符合題目要求
             }
             auto tmp = stod(this->val) / stod(var2.val);
             // cout << tmp << endl;
@@ -277,7 +277,7 @@ public:
                    || (this->type == DataType::Int && var2.type == DataType::Float) 
                    || (this->type == DataType::Float && var2.type == DataType::Int)) {
             if (var2.val == "0" || var2.val == "0.0") {
-                throw runtime_error("Error in operator/");
+                throw runtime_error("Error"); // 為符合題目要求
             }
             rtype = DataType::Float;
             result = to_string(stod(this->val) / stod(var2.val));
@@ -684,14 +684,24 @@ private:
         
         // cout << "cur: " + cur_token.val + " | next: " + lexer.peek_token().val << endl;
         } else if (is_in(cur_token.val, {"+", "-", "!"})) {
+            // 此版本中只有num錢可以接sign
             if (cur_token.val == "+") {
                 next();
+                if (cur_token.type == TokenType::Ident) {
+                    throw runtime_error("> Unexpected token : '" + cur_token.val + "'");
+                }
                 result = parse_factor();
             } else if (cur_token.val == "-") {
                 next();
+                if (cur_token.type == TokenType::Ident) {
+                    throw runtime_error("> Unexpected token : '" + cur_token.val + "'");
+                }
                 result = -parse_factor();
             } else if (cur_token.val == "!") {
                 next();
+                if (cur_token.type == TokenType::Ident) {
+                    throw runtime_error("> Unexpected token : '" + cur_token.val + "'");
+                }
                 result = !parse_factor();
             }
         } else {
@@ -705,6 +715,16 @@ private:
                     if (next_token.type == TokenType::Point) {
                         throw runtime_error("> Unexpected token : '" + next_token.val + "'");
                     }
+                }
+                result = convert_to_var(num_tk);
+                next();
+            
+            } else if (cur_token.type == TokenType::Point) {
+                auto num_tk = cur_token;
+                auto next_token = lexer.peek_token();
+                // cout << next_token.type << " " << next_token.val << endl;
+                if (next_token.type == TokenType::Point) {
+                    throw runtime_error("> Unexpected token : '" + next_token.val + "'");
                 }
                 result = convert_to_var(num_tk);
                 next();
@@ -859,12 +879,13 @@ public:
             } else {
                 result = parse_exp();
             }
-            if (cur_token.type != TokenType::Semicolon) {
-                if (is_in(cur_token.val, symbols)){
-                    throw runtime_error("> Unexpected token : '" + cur_token.val + "'");
-                } else {
-                    throw runtime_error("> Unrecognized token with first char : '" + cur_token.val + "'");
-                }
+        }
+
+        if (cur_token.type != TokenType::Semicolon) {
+            if (is_in(cur_token.val, symbols)){
+                throw runtime_error("> Unexpected token : '" + cur_token.val + "'");
+            } else {
+                throw runtime_error("> Unrecognized token with first char : '" + cur_token.val + "'");
             }
         }
         print_var(result);
@@ -921,7 +942,6 @@ string trim(const string& s) {
 }
 
 variable convert_to_var(const token tk) {
-    // 假設輸入至多一個小數點
     if (tk.type == TokenType::Number) {
         for (int i = 0; i < tk.val.length(); i++) {
             if (tk.val[i] == '.') {
@@ -929,6 +949,8 @@ variable convert_to_var(const token tk) {
             }
         }
         return {DataType::Int, tk.val};
+    } else if (tk.type == TokenType::Point) {
+        return {DataType::Float, "0" + tk.val};
     } else if (tk.type == TokenType::Str) {
         return {DataType::String, tk.val};
     } else if (tk.type == TokenType::Chr) {

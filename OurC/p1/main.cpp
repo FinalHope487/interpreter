@@ -11,6 +11,8 @@
 #include <unordered_set>
 #include <vector>
 #include <iomanip>
+#include <fstream>
+#include <sstream>
 // #include <iterator>
 // #include <map>
 // #include <optional>
@@ -100,6 +102,8 @@ string enum_to_DataType(int type) {
 // ========================================Non-Variable Function Definition========================================
 bool is_float(double num);
 bool is_in(const string& op, const unordered_set<string> targets);
+string trim(const string& s);
+string num_to_string(double num);
 bool parse_wrapper(string cmd);
 
 // ========================================Struct Definition========================================
@@ -131,6 +135,7 @@ private:
         if (var2.type == DataType::Char && var2.val.length() == 1) n2 = (int)(var2.val[0]);
         else if (var2.type == DataType::Int || var2.type == DataType::Float) n2 = stod(var2.val);
         else throw runtime_error("Error in bool_evaluate with values: " + var1.val + " " + op + " " + var2.val);
+        
         if (op == "=") {
             if (abs(n1 - n2) <= ErrorValue) return {DataType::Bool, "true"};
             else return {DataType::Bool, "false"};
@@ -177,7 +182,7 @@ public:
 
     variable operator-() {
         if (DataType::Int == this->type || DataType::Float == this->type) {
-            return {this->type, to_string(-stod(this->val))};
+            return {this->type, num_to_string(-stod(this->val))};
         } else {
             throw runtime_error("Error in operator unary -");
         }
@@ -196,13 +201,13 @@ public:
         string result;
         if (this->type == DataType::Int && var2.type == DataType::Int) {
             rtype = DataType::Int;
-            result = to_string(stod(this->val) + stod(var2.val));
+            result = num_to_string(stod(this->val) + stod(var2.val));
 
         } else if ((this->type == DataType::Float && var2.type == DataType::Float) 
                    || (this->type == DataType::Int && var2.type == DataType::Float) 
                    || (this->type == DataType::Float && var2.type == DataType::Int)) {
             rtype = DataType::Float;
-            result = to_string(stod(this->val) + stod(var2.val));
+            result = num_to_string(stod(this->val) + stod(var2.val));
 
         } else if (this->type == DataType::String && (var2.type == DataType::String || var2.type == DataType::Char)
                    || (this->type == DataType::Char && var2.type == DataType::String)) {
@@ -211,7 +216,7 @@ public:
         
         } else if (this->type == DataType::Char && var2.type == DataType::Char) {
             rtype = DataType::Char;
-            result = to_string(this->val[0] + var2.val[0]);
+            result = num_to_string(this->val[0] + var2.val[0]);
 
         } else {
             throw runtime_error("Error in operator+");
@@ -225,13 +230,13 @@ public:
         string result;
         if (this->type == DataType::Int && var2.type == DataType::Int) {
             rtype = DataType::Int;
-            result = to_string(stod(this->val) - stod(var2.val));
+            result = num_to_string(stod(this->val) - stod(var2.val));
 
         } else if ((this->type == DataType::Float && var2.type == DataType::Float) 
                    || (this->type == DataType::Int && var2.type == DataType::Float) 
                    || (this->type == DataType::Float && var2.type == DataType::Int)) {
             rtype = DataType::Float;
-            result = to_string(stod(this->val) - stod(var2.val));
+            result = num_to_string(stod(this->val) - stod(var2.val));
 
         } else {
             throw runtime_error("Error in operator-");
@@ -245,13 +250,13 @@ public:
         string result;
         if (this->type == DataType::Int && var2.type == DataType::Int) {
             rtype = DataType::Int;
-            result = to_string(stod(this->val) * stod(var2.val));
+            result = num_to_string(stod(this->val) * stod(var2.val));
 
         } else if ((this->type == DataType::Float && var2.type == DataType::Float) 
                    || (this->type == DataType::Int && var2.type == DataType::Float) 
                    || (this->type == DataType::Float && var2.type == DataType::Int)) {
             rtype = DataType::Float;
-            result = to_string(stod(this->val) * stod(var2.val));
+            result = num_to_string(stod(this->val) * stod(var2.val));
 
         } else {
             throw runtime_error("Error in operator*");
@@ -265,22 +270,22 @@ public:
         string result;
         if (this->type == DataType::Int && var2.type == DataType::Int) {
             if (var2.val == "0") {
-                throw runtime_error("Error"); // 為符合題目要求
+                throw runtime_error("> Error"); // 為符合題目要求
             }
             auto tmp = stod(this->val) / stod(var2.val);
             // cout << tmp << endl;
             if (is_float(tmp)) rtype = DataType::Float;
             else rtype = DataType::Int;
-            result = to_string(tmp);
+            result = num_to_string(tmp);
 
         } else if ((this->type == DataType::Float || this->type == DataType::Float) 
                    || (this->type == DataType::Int && var2.type == DataType::Float) 
                    || (this->type == DataType::Float && var2.type == DataType::Int)) {
             if (var2.val == "0" || var2.val == "0.0") {
-                throw runtime_error("Error"); // 為符合題目要求
+                throw runtime_error("> Error"); // 為符合題目要求
             }
             rtype = DataType::Float;
-            result = to_string(stod(this->val) / stod(var2.val));
+            result = num_to_string(stod(this->val) / stod(var2.val));
 
         } else {
             throw runtime_error("Error in operator/");
@@ -449,18 +454,18 @@ const unordered_set<string> symbols = {
 
 // unexpected next token types
 unordered_map<TokenType, vector<TokenType>> unexpected_types = {
-    {TokenType::Number, {Sign, Assign}},
-    {TokenType::Point, {Sign, Assign}},
-    {TokenType::Ident, {Sign, Ident}},
-    {TokenType::Str, {Sign, Assign, Increment, Decrement}},
-    {TokenType::Chr, {Sign, Assign}},
-    {TokenType::Boolean, {Sign, Assign, Increment, Decrement}}, // 需要檢查
-    {TokenType::Operator, {Operator, Assign, Increment, Decrement}},
+    {TokenType::Number, {Sign, Assign, Ident, LParen}},
+    {TokenType::Point, {Sign, Assign, Ident, LParen}},
+    {TokenType::Ident, {Sign, Ident, LParen}},
+    {TokenType::Str, {Sign, Assign, Increment, Decrement, LParen}},
+    {TokenType::Chr, {Sign, Assign, LParen}},
+    {TokenType::Boolean, {Sign, Assign, Increment, Decrement, LParen}}, // 需要檢查
+    {TokenType::Operator, {Assign, Operator, Assign, Increment, Decrement}},
     {TokenType::SignOperator, {Operator, Assign, Increment, Decrement}},
     {TokenType::Sign, {Operator, Assign, Increment, Decrement}},
     {TokenType::Assign, {Operator, Assign, Increment, Decrement}},
-    {TokenType::Increment, {Operator, Assign, Increment, Decrement}},
-    {TokenType::Decrement, {Operator, Assign, Increment, Decrement}},
+    {TokenType::Increment, {Operator, Assign, Increment, Decrement, LParen}},
+    {TokenType::Decrement, {Operator, Assign, Increment, Decrement, LParen}},
     {TokenType::LParen, {Operator, Assign}},
     {TokenType::RParen, {Sign, Assign, Increment, Decrement}},
     // {TokenType::LBracket, {Operator, Assign}},
@@ -476,7 +481,6 @@ unordered_map<TokenType, vector<TokenType>> unexpected_types = {
 // ========================================Variable Function Definition========================================
 
 vector<string> split_by_semicolon(const string& content);
-string trim(const string& s);
 variable convert_to_var(const token tk);
 void print_var(const variable& var);
 
@@ -761,7 +765,7 @@ private:
                 // cout << result.val << " / " << a.val << endl;
                 result = result / a;
                 // if (stod(a.val) != 0) val = val / a;
-                // else throw runtime_error("Error");
+                // else throw runtime_error("> Error");
             }
         }
 
@@ -962,6 +966,12 @@ variable convert_to_var(const token tk) {
     }
 }
 
+string num_to_string(double num) {
+    stringstream ss;
+    ss << setprecision(15) << num;
+    return ss.str();
+}
+
 bool is_float(double num) {
     // 可能有點問題
     // cout << num << " " << floor(num) << endl;
@@ -1001,9 +1011,6 @@ void print_var(const variable& var) {
         cout << "> " << var.val << endl;
     }
 }
-
-#include <fstream>
-#include <sstream>
 
 int main() {
     // ios::sync_with_stdio(false);

@@ -132,22 +132,22 @@ private:
         else if (var2.type == DataType::Int || var2.type == DataType::Float) n2 = stod(var2.val);
         else throw runtime_error("Error in bool_evaluate with values: " + var1.val + " " + op + " " + var2.val);
         if (op == "=") {
-            if (n1 == n2) return {DataType::Bool, "true"};
+            if (abs(n1 - n2) <= ErrorValue) return {DataType::Bool, "true"};
             else return {DataType::Bool, "false"};
         } else if (op == "!=") {
-            if (n1 != n2) return {DataType::Bool, "true"};
+            if (abs(n1 - n2) > ErrorValue) return {DataType::Bool, "true"};
             else return {DataType::Bool, "false"};
         } else if (op == "<") {
-            if (n1 < n2) return {DataType::Bool, "true"};
+            if (n1 + ErrorValue < n2) return {DataType::Bool, "true"};
             else return {DataType::Bool, "false"};
         } else if (op == ">") {
-            if (n1 > n2) return {DataType::Bool, "true"};
+            if (n1 > n2 + ErrorValue) return {DataType::Bool, "true"};
             else return {DataType::Bool, "false"};
         } else if (op == "<=") {
-            if (n1 <= n2) return {DataType::Bool, "true"};
+            if (n1 + ErrorValue <= n2) return {DataType::Bool, "true"};
             else return {DataType::Bool, "false"};
         } else if (op == ">=") {
-            if (n1 >= n2) return {DataType::Bool, "true"};
+            if (n1 >= n2 + ErrorValue) return {DataType::Bool, "true"};
             else return {DataType::Bool, "false"};
         } else {
             throw runtime_error("Error in bool_evaluate with values: " + var1.val + " " + op + " " + var2.val);
@@ -289,25 +289,9 @@ public:
         return {rtype, result};
     }
 
-    // variable operator%(const variable& var2) {
-    //     DataType rtype;
-    //     string result;
-    //     if (this->type == DataType::Int && var2.type == DataType::Int) {
-    //         rtype = DataType::Int;
-    //         if (var2.val == "0") {
-    //             throw runtime_error("Error in operator%");
-    //         }
-    //         result = to_string(stod(this->val) % stod(var2.val));
-
-    //     } else {
-    //         throw runtime_error("Error in operator%");
-    //     }
-
-    //     return {rtype, result};
-    // }
     variable operator==(const variable& var2) {
         if (!is_comparable(*this, var2)) {
-            throw runtime_error("Error in operator==");
+            throw runtime_error("Error in operator==: incomparable variable");
         }
         DataType rtype;
         string result;
@@ -328,6 +312,9 @@ public:
     }
 
     variable operator!=(const variable& var2) {
+        if (!is_comparable(*this, var2)) {
+            throw runtime_error("Error in operator!=: incomparable variable");
+        }
         DataType rtype;
         string result;
         if (this->type == DataType::String && var2.type == DataType::String) {
@@ -347,6 +334,9 @@ public:
     }
 
     variable operator>=(const variable& var2) {
+        if (!is_comparable(*this, var2)) {
+            throw runtime_error("Error in operator>=: incomparable variable");
+        }
         DataType rtype;
         string result;
         if (this->type == DataType::String && var2.type == DataType::String) {
@@ -366,6 +356,9 @@ public:
     }
 
     variable operator<=(const variable& var2) {
+        if (!is_comparable(*this, var2)) {
+            throw runtime_error("Error in operator<=: incomparable variable");
+        }
         DataType rtype;
         string result;
         if (this->type == DataType::String && var2.type == DataType::String) {
@@ -385,6 +378,9 @@ public:
     }
 
     variable operator>(const variable& var2) {
+        if (!is_comparable(*this, var2)) {
+            throw runtime_error("Error in operator>: incomparable variable");
+        }
         DataType rtype;
         string result;
         if (this->type == DataType::String && var2.type == DataType::String) {
@@ -404,6 +400,9 @@ public:
     }
 
     variable operator<(const variable& var2) {
+        if (!is_comparable(*this, var2)) {
+            throw runtime_error("Error in operator<: incomparable variable");
+        }
         DataType rtype;
         string result;
         if (this->type == DataType::String && var2.type == DataType::String) {
@@ -452,7 +451,7 @@ const unordered_set<string> symbols = {
 unordered_map<TokenType, vector<TokenType>> unexpected_types = {
     {TokenType::Number, {Sign, Assign}},
     {TokenType::Point, {Sign, Assign}},
-    {TokenType::Ident, {Sign}},
+    {TokenType::Ident, {Sign, Ident}},
     {TokenType::Str, {Sign, Assign, Increment, Decrement}},
     {TokenType::Chr, {Sign, Assign}},
     {TokenType::Boolean, {Sign, Assign, Increment, Decrement}}, // 需要檢查
@@ -511,17 +510,24 @@ private:
         // num (以小數點切割)
         } else if (isdigit(text[idx]) || text[idx] == '.') {
             string num_str;
-            bool is_f = false;
-            if (text[idx] == '.') is_f = true;
-            while (idx < text.length() && (isdigit(text[idx]) || text[idx] == '.')) {
+
+            if (text[idx] == '.') {
+                // If it starts with '.', treat as point
                 num_str += text[idx];
                 idx++;
-                if (idx < text.length() && text[idx] == '.') {
-                    if (is_f) return {TokenType::Point, num_str};
-                    else return {TokenType::Number, num_str};
+                while (idx < text.length() && isdigit(text[idx])) {
+                    num_str += text[idx];
+                    idx++;
                 }
+                return {TokenType::Point, num_str};
+            } else if (isdigit(text[idx])) {
+                // If it starts with number
+                while (idx < text.length() && isdigit(text[idx])) {
+                    num_str += text[idx];
+                    idx++;
+                }
+                return {TokenType::Number, num_str};
             }
-            return {TokenType::Number, num_str};
         
         // boolean
         } else if (text.compare(idx, 4, "true") == 0) {
@@ -694,6 +700,11 @@ private:
                 if (lexer.peek_token().type == TokenType::Point) {
                     next();
                     num_tk.val += cur_token.val;
+                    auto next_token = lexer.peek_token();
+                    // cout << next_token.type << " " << next_token.val << endl;
+                    if (next_token.type == TokenType::Point) {
+                        throw runtime_error("> Unexpected token : '" + next_token.val + "'");
+                    }
                 }
                 result = convert_to_var(num_tk);
                 next();
@@ -814,6 +825,11 @@ public:
         return cur_token.type == TokenType::EndOfFile;
     }
 
+    bool is_quit() const {
+        // 將quit直接當成ident 如果在cmd第一個時調用成功 則當作quit指令
+        return cur_token.type == TokenType::Ident && cur_token.val == "quit";
+    }
+
     string get_rest_str() {
         return lexer.get_rest_str();
     }
@@ -890,17 +906,8 @@ vector<string> split_by_semicolon(const string& content) {
             idx++;
         }
         string trimmed = trim(str);
-        string quit_check = trimmed;
-        size_t start_q = quit_check.find_first_not_of(" \t\n\r");
-        if (start_q != string::npos) quit_check = quit_check.substr(start_q);
-        else quit_check = "";
-
-        if (quit_check.compare(0, 4, "quit") == 0) {
-            break;
-        } else {
-            if (trimmed.length() > 0) exps.push_back(trimmed);
-            str = "";
-        }
+        if (trimmed.length() > 0) exps.push_back(trimmed);
+        str = "";
     }
     return exps;
 }
@@ -1004,9 +1011,13 @@ int main() {
         if (skip_until_newline) {
             auto pos = cmds[i].find_first_of("\n");
             if (pos != string::npos) {
+                Parser p(cmds[i].substr(pos));
+                if (p.is_quit()) break;
                 skip_until_newline = parse_wrapper(cmds[i].substr(pos));
             }
         } else {
+            Parser p(cmds[i]);
+            if (p.is_quit()) break;
             skip_until_newline = parse_wrapper(cmds[i]);
         }
     }

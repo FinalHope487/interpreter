@@ -120,8 +120,10 @@ struct variable {
 private:
     bool is_comparable(const variable& var1, const variable& var2) {
         if ((var1.type == DataType::String && var2.type == DataType::String)
-            || ((var1.type == DataType::Char || var1.type == DataType::Int || var1.type == DataType::Float) 
-                && (var2.type == DataType::Char || var2.type == DataType::Int || var2.type == DataType::Float))) {
+            || ((var1.type == DataType::Char || var1.type == DataType::Int 
+            || var1.type == DataType::Float || var1.type == DataType::Bool) 
+            && (var2.type == DataType::Char || var2.type == DataType::Int 
+            || var2.type == DataType::Float || var2.type == DataType::Bool))) {
             return true;
         }
         return false;
@@ -131,9 +133,11 @@ private:
         double n1, n2;
         if (var1.type == DataType::Char && var1.val.length() == 1) n1 = (int)(var1.val[0]);
         else if (var1.type == DataType::Int || var1.type == DataType::Float) n1 = stod(var1.val);
+        else if (var1.type == DataType::Bool) n1 = var1.val == "false" ? 0 : 1;
         else throw runtime_error("Error in bool_evaluate with values: " + var1.val + " " + op + " " + var2.val);
         if (var2.type == DataType::Char && var2.val.length() == 1) n2 = (int)(var2.val[0]);
         else if (var2.type == DataType::Int || var2.type == DataType::Float) n2 = stod(var2.val);
+        else if (var2.type == DataType::Bool) n2 = var2.val == "false" ? 0 : 1;
         else throw runtime_error("Error in bool_evaluate with values: " + var1.val + " " + op + " " + var2.val);
         
         if (op == "=") {
@@ -296,7 +300,7 @@ public:
 
     variable operator==(const variable& var2) {
         if (!is_comparable(*this, var2)) {
-            throw runtime_error("Error in operator==: incomparable variable");
+            throw runtime_error("Error in operator==: incomparable variable: " + enum_to_DataType(this->type) + ", " + enum_to_DataType(var2.type));
         }
         DataType rtype;
         string result;
@@ -428,12 +432,12 @@ public:
 
     variable operator&&(const variable& var2) {
         // 兩者皆為 true 才為 true
-        if (*this && var2) return {DataType::Bool, "true"};
+        if (bool(*this) && bool(var2)) return {DataType::Bool, "true"};
         else return {DataType::Bool, "false"};
     }
 
     variable operator||(const variable& var2) {
-        if (*this || var2) return {DataType::Bool, "true"};
+        if (bool(*this) || bool(var2)) return {DataType::Bool, "true"};
         else return {DataType::Bool, "false"};
     }
 };  
@@ -759,7 +763,8 @@ private:
             if (cur_token.val == "*") {
                 next();
                 result = result * parse_factor();
-            } else if (cur_token.val == "/") {
+            } 
+            if (cur_token.val == "/") {
                 next();
                 auto a = parse_factor();
                 // cout << result.val << " / " << a.val << endl;
@@ -782,7 +787,8 @@ private:
             if (cur_token.val == "+") {
                 next();
                 val = val + parse_term();
-            } else if (cur_token.val == "-") {
+            } 
+            if (cur_token.val == "-") {
                 next();
                 val = val - parse_term();
             }
@@ -791,39 +797,80 @@ private:
         return val;
     }
 
-    variable parse_bool_exp() {
-        // == >= <> <= && ||
+    variable parse_relation_exp() {
+        // < <= > >=
         variable result = parse_exp();
         if (cur_token.type == TokenType::EndOfFile) return result;
         
-        while (is_in(cur_token.val, {"=", "<=", ">=", "<>", "&&", "||", "<", ">"})) {
-            if (cur_token.val == "=") {
+        if (is_in(cur_token.val, {"<=", ">=", "<", ">", "=", "<>"})) {
+            if (cur_token.val == ">") {
                 next();
-                result = result == parse_exp();
+                result = result > parse_exp();
+            } else if (cur_token.val == "<") {
+                next();
+                result = result < parse_exp();
             } else if (cur_token.val == ">=") {
                 next();
                 result = result >= parse_exp();
             } else if (cur_token.val == "<=") {
                 next();
                 result = result <= parse_exp();
+            } else if (cur_token.val == "=") {
+                next();
+                result = result == parse_exp();
             } else if (cur_token.val == "<>") {
                 next();
                 result = result != parse_exp();
-            } else if (cur_token.val == "&&") {
-                next();
-                result = result && parse_exp();
-            } else if (cur_token.val == "||") {
-                next();
-                result = result || parse_exp();
-            } else if (cur_token.val == "<") {
-                next();
-                result = result < parse_exp();
-            } else if (cur_token.val == ">") {
-                next();
-                result = result > parse_exp();
-            } 
+            }
         }
         return result;
+    } 
+    // variable parse_equal_exp() {
+    //     // == <>
+    //     variable result = parse_relation_exp();
+    //     if (cur_token.type == TokenType::EndOfFile) return result;
+        
+    //     while (is_in(cur_token.val, {"=", "<>"})) {
+    //         if (cur_token.val == "=") {
+    //             next();
+    //             result = result == parse_relation_exp();
+    //         } 
+    //         if (cur_token.val == "<>") {
+    //             next();
+    //             result = result != parse_relation_exp();
+    //         }
+    //     }
+    //     return result;
+    // } 
+    // variable parse_and_exp() {
+    //     // &&
+    //     variable result = parse_relation_exp();
+    //     if (cur_token.type == TokenType::EndOfFile) return result;
+        
+    //     while (is_in(cur_token.val, {"&&"})) {
+    //         if (cur_token.val == "&&") {
+    //             next();
+    //             result = result && parse_relation_exp();
+    //         }
+    //     }
+    //     return result;
+    // } 
+    // variable parse_or_exp() {
+    //     // ||
+    //     variable result = parse_and_exp();
+    //     if (cur_token.type == TokenType::EndOfFile) return result;
+        
+    //     while (is_in(cur_token.val, {"||"})) {
+    //         if (cur_token.val == "||") {
+    //             next();
+    //             result = result || parse_and_exp();
+    //         } 
+    //     }
+    //     return result;
+    // } 
+
+    variable parse_bool_exp() {
+        return parse_relation_exp();
     } 
 
     variable parse_statement() {

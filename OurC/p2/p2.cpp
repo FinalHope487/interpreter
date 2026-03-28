@@ -40,10 +40,10 @@ enum TokenType {
     Sign, // 可以連著很多sign
     LParen,
     RParen,
-    // LBracket,
-    // RBracket,
-    // LBrace,
-    // RBrace,
+    LBracket,
+    RBracket,
+    LBrace,
+    RBrace,
     Increment,
     Decrement,
     Semicolon,
@@ -74,10 +74,10 @@ string enum_to_TokenType(int type) {
         case TokenType::Sign: return "Sign";
         case TokenType::LParen: return "LParen";
         case TokenType::RParen: return "RParen";
-        // case TokenType::LBracket: return "LBracket";
-        // case TokenType::RBracket: return "RBracket";
-        // case TokenType::LBrace: return "LBrace";
-        // case TokenType::RBrace: return "RBrace";
+        case TokenType::LBracket: return "LBracket";
+        case TokenType::RBracket: return "RBracket";
+        case TokenType::LBrace: return "LBrace";
+        case TokenType::RBrace: return "RBrace";
         case TokenType::Increment: return "Increment";
         case TokenType::Decrement: return "Decrement";
         case TokenType::Semicolon: return "Semicolon";
@@ -195,7 +195,7 @@ private:
         else if (var2.type == DataType::Bool) n2 = var2.val == "false" ? 0 : 1;
         else throw runtime_error("Error in bool_evaluate with values: " + var1.val + " " + op + " " + var2.val);
         
-        if (op == "=") {
+        if (op == "==") {
             if (abs(n1 - n2) <= ErrorValue) return {DataType::Bool, "true"};
             else return {DataType::Bool, "false"};
         } else if (op == "!=") {
@@ -341,7 +341,7 @@ public:
                    || (this->type == DataType::Int && var2.type == DataType::Float) 
                    || (this->type == DataType::Float && var2.type == DataType::Int)) {
             if (var2.val == "0" || var2.val == "0.0") {
-                throw runtime_error("> Error"); // 為符合題目要求
+                throw runtime_error("> Error in operator/: division by zero");
             }
             rtype = DataType::Float;
             result = num_to_string(stod(this->val) / stod(var2.val));
@@ -351,6 +351,17 @@ public:
         }
 
         return {rtype, result};
+    }
+
+    variable operator% (const variable& var2) {
+        if (this->type != DataType::Int || var2.type != DataType::Int) {
+            throw runtime_error("Error in operator%: operands must be integers");
+        }
+        if (var2.val == "0") {
+            throw runtime_error("Error in operator%: division by zero");
+        }
+        int result = stoi(this->val) % stoi(var2.val);
+        return {DataType::Int, to_string(result)};
     }
 
     variable operator==(const variable& var2) {
@@ -495,8 +506,27 @@ public:
         if (bool(*this) || bool(var2)) return {DataType::Bool, "true"};
         else return {DataType::Bool, "false"};
     }
-};  
 
+    variable operator+=(const variable& var2) {
+        return *this = *this + var2;
+    }
+
+    variable operator-=(const variable& var2) {
+        return *this = *this - var2;
+    }
+
+    variable operator*=(const variable& var2) {
+        return *this = *this * var2;
+    }
+
+    variable operator/=(const variable& var2) {
+        return *this = *this / var2;
+    }
+
+    variable operator%=(const variable& var2) {
+        return *this = *this % var2;
+    }
+};  
 
 struct func {
     DataType type;
@@ -507,19 +537,21 @@ struct func {
 // 變數名: (資料型態, 變數值)
 unordered_map<string, variable> ident_table;
 unordered_map<string, func> func_table;
+// =, +=, -=, *=, /=, %=, ? :, &&, ||, !, ==, !=, <, >, <=, >=, <<, >>, +, -, *, /, %
 const unordered_set<string> symbols = {
-    "+", "-", "*", "/", "++", "--", 
-    "=", "<>", ">", "<", ">=", "<=", "&&", "||", "!", 
-    ":=", "+=", "-=", "*=", "/=", "(", ")", ",", ";", 
-    // "{", "}", "[", "]", "<<", ">>", ":", "?"
+    "=", "+=", "-=", "*=", "/=", "%=", 
+    "?", ":", "&&", "||", "!", "==", "!=", "<", ">", "<=", ">=", "<<", ">>", 
+    "+", "-", "*", "/", "%", "++", "--", "(", ")", ",", ";", "[", "]", "{", "}"
 };
 
 const unordered_set<string> data_types = {
-    "int", "float", "char", "bool", "string"
+    "int", "float", "char", "bool", "string", "void"
 };
 
 const unordered_set<string> keywords = ([] {
-    unordered_set<string> combined = {"cin", "cout", "ListAllVariables", "ListAllFunctions", "ListVariable", "ListFunction", "Done"};
+    unordered_set<string> combined = {"cin", "cout", "ListAllVariables", "ListAllFunctions", 
+        "ListVariable", "ListFunction", "Done", "if", "else", "while", "for", "return", "break", "continue"
+    };
     combined.insert(data_types.begin(), data_types.end());
     return combined;
 }());
@@ -540,10 +572,10 @@ unordered_map<TokenType, vector<TokenType>> unexpected_types = {
     {TokenType::Decrement, {Operator, Assign, Increment, Decrement, LParen}},
     {TokenType::LParen, {Operator, Assign}},
     {TokenType::RParen, {Sign, Assign, Increment, Decrement}},
-    // {TokenType::LBracket, {Operator, Assign}},
-    // {TokenType::RBracket, {Sign}},
-    // {TokenType::LBrace, {Operator, Assign}},
-    // {TokenType::RBrace, {Sign, Assign, Increment, Decrement}},
+    {TokenType::LBracket, {Operator, Assign}},
+    {TokenType::RBracket, {Sign}},
+    {TokenType::LBrace, {Operator, Assign}},
+    {TokenType::RBrace, {Sign, Assign, Increment, Decrement}},
     {TokenType::Semicolon, {}},
     {TokenType::EndOfFile, {}},
     {TokenType::Null, {}},
@@ -602,7 +634,7 @@ void ListAllVariables() {
     for (const auto& name : var_names) {
         cout << name << endl;
     }
-    cout << endl;
+    cout << "" << endl;
 }
 
 void ListAllFunctions() {
@@ -733,14 +765,14 @@ private:
             if (idx + 1 < text.length()) {
                 string s = string("") + text[idx] + text[idx + 1];
 
-                if (s == ":=") {idx += 2; return {TokenType::Assign, ":="};}
-                else if (s == "+=") {idx += 2; return {TokenType::Assign, "+="};}
+                if (s == "+=") {idx += 2; return {TokenType::Assign, "+="};}
                 else if (s == "-=") {idx += 2; return {TokenType::Assign, "-="};}
                 else if (s == "*=") {idx += 2; return {TokenType::Assign, "*="};}
                 else if (s == "/=") {idx += 2; return {TokenType::Assign, "/="};}
+                else if (s == "==") {idx += 2; return {TokenType::Operator, "=="};}
                 else if (s == ">=") {idx += 2; return {TokenType::Operator, ">="};}
                 else if (s == "<=") {idx += 2; return {TokenType::Operator, "<="};}
-                else if (s == "<>") {idx += 2; return {TokenType::Operator, "<>"};}
+                else if (s == "!=") {idx += 2; return {TokenType::Operator, "!="};}
                 else if (s == "&&") {idx += 2; return {TokenType::Operator, "&&"};}
                 else if (s == "||") {idx += 2; return {TokenType::Operator, "||"};}
                 else if (s == "++") {idx += 2; return {TokenType::Increment, "++"};}
@@ -838,7 +870,7 @@ private:
         // ident未定義且後面非賦值
         } else if (cur_token.type == TokenType::Ident 
                    && ident_table.find(cur_token.val) == ident_table.end()
-                   && next_token.val != ":=") {
+                   && next_token.val != "=") {
             throw runtime_error("> Undefined identifier : '" + cur_token.val + "'");
         }
         cur_token = lexer.get_next_token();
@@ -977,7 +1009,7 @@ private:
             {">=", [](variable a, variable b) { return a >= b; }},
             {"<=", [](variable a, variable b) { return a <= b; }},
             {"==", [](variable a, variable b) { return a == b; }},
-            {"<>", [](variable a, variable b) { return a != b; }}
+            {"!=", [](variable a, variable b) { return a != b; }}
         };
         auto it = op_map.find(cur_token.val);
         if (it != op_map.end()) {
@@ -1035,61 +1067,8 @@ private:
         return parse_relation_exp();
     } 
 
-    variable parse_statement() {
-        // 處理包含預設值或不包含預設值的宣告賦值
-        static const unordered_map<string, DataType> type_map = {
-            {"int", DataType::Int}, {"float", DataType::Float},
-            {"bool", DataType::Bool}, {"char", DataType::Char}, {"string", DataType::String}
-        };
-        variable result;
 
-        if (cur_token.type == TokenType::Ident && type_map.find(cur_token.val) != type_map.end()) {
-            DataType dt = type_map.at(cur_token.val);
-            next();
-            // 不可為已定義的變數或資料型態
-            if (cur_token.type == TokenType::Ident 
-                && type_map.find(cur_token.val) == type_map.end()
-                && ident_table.find(cur_token.val) == ident_table.end()) {
-                token id_token = cur_token;
-                next();
-                
-                // data_type ident := exp
-                if (cur_token.val == ":=") {
-                    next();
-                    result = parse_exp();
-                    if (result.type != dt) {
-                        throw runtime_error("> Type mismatch in variable declaration: expected " + enum_to_DataType(dt) + " but got " + enum_to_DataType(result.type));
-                    }
-                    ident_table[id_token.val] = result;
-
-                // data_type ident
-                } else {
-                    result = {dt, ""};
-                    ident_table[id_token.val] = {dt, ""};
-                }
-                cout << "> Definition of " << id_token.val << " entered ..." << endl;
-            } else {
-                throw runtime_error("> Invalid statement at parse_statement() : expected identifier but got '" + cur_token.val + "'");
-            }
-
-        // ident := exp
-        } else if (cur_token.type == TokenType::Ident 
-                   && ident_table.find(cur_token.val) != ident_table.end() 
-                   && lexer.peek_token().val == ":=") {
-            token id_token = cur_token; 
-            next();
-            next();
-            result = parse_exp();
-            ident_table[id_token.val] = result;
-            cout << "> Statement executed ..." << endl;
-
-        } else {
-           throw runtime_error("> Invalid statement");
-        } 
-        return result;
-    }
-
-    variable parse_io(const string& type, bool is_return_bool) {
+    variable parse_io(const string& type) {
         // cin >> ident >> ident ...
         // cout << bool_exp | exp << bool_exp | exp ...
         variable result;
@@ -1128,14 +1107,7 @@ private:
                     cout << ident_table[cur_token.val].val;
                     next();
                 } else {
-                    if (is_return_bool) {
-                        result = parse_bool_exp();
-                        // if (result.type != DataType::Bool) {
-                        //     throw runtime_error("> Invalid IO statement: expected bool_exp");
-                        // }
-                    } else {
-                        result = parse_exp();
-                    }
+                    result = parse_exp();
                     cout << result.val;
                 }
             }
@@ -1146,10 +1118,125 @@ private:
         return result;
     }
 
+    variable parse_if_else() {
+        variable result, condition;
+        if (cur_token.val == "if") {
+            next();
+            if (cur_token.val != "(") {
+                throw runtime_error("> Invalid if statement: expected (");
+            }
+            next();
+            condition = parse_bool_exp();
+            if (cur_token.val != ")") {
+                throw runtime_error("> Invalid if statement: expected )");
+            }
+            next();
+            if (bool(condition)) result = parse_statement();
+            else parse_statement();
+        } else if (cur_token.val == "else" && lexer.peek_token().val == "if") {
+            next();
+            if (bool(condition)) result = parse_statement();
+            else parse_statement();
+        } else if (cur_token.val == "else") {
+            next();
+            if (bool(condition)) result = parse_statement();
+            else parse_statement();
+        }
+        return result;
+    }
+
+    variable parse_while() {
+        
+    }
+
+    variable parse_for() {
+        
+    }
+
+    void parse_block() {
+        vector<variable> block_vars;
+        if (cur_token.val == "{") {
+            next();
+            while (block_vars.size() > 0) {
+                if (cur_token.type == TokenType::LBrace) {
+                    block_vars.push_back(cur_token);
+                } else if (cur_token.type == TokenType::RBrace) {
+                    block_vars.pop_back();
+                }
+                result = parse_statement();
+            }
+            next();
+        }
+        return result;
+    }
+
+    variable parse_statement() {
+        // 處理包含預設值或不包含預設值的宣告賦值
+        static const unordered_map<string, DataType> type_map = {
+            {"int", DataType::Int}, {"float", DataType::Float},
+            {"bool", DataType::Bool}, {"char", DataType::Char}, {"string", DataType::String}
+        };
+        variable result;
+
+        // 處理宣告賦值
+        if (cur_token.type == TokenType::Ident && type_map.find(cur_token.val) != type_map.end()) {
+            DataType dt = type_map.at(cur_token.val);
+            next();
+            // 可重新宣告已定義的變數或資料型態
+            if (cur_token.type == TokenType::Ident 
+                && type_map.find(cur_token.val) == type_map.end()) {
+                bool is_redefinition = false;
+                if (ident_table.find(cur_token.val) != ident_table.end()) {
+                    is_redefinition = true;
+                }
+                token id_token = cur_token;
+                next();
+                
+                // data_type ident = exp (可能不符合文法)
+                // if (cur_token.val == "=") {
+                //     next();
+                //     result = parse_exp();
+                //     if (result.type != dt) {
+                //         throw runtime_error("> Type mismatch in variable declaration: expected " + enum_to_DataType(dt) + " but got " + enum_to_DataType(result.type));
+                //     }
+                //     ident_table[id_token.val] = result;
+
+                // // data_type ident
+                // } else {
+                result = {dt, ""};
+                ident_table[id_token.val] = {dt, ""};
+                // }
+                if (is_redefinition) {
+                    cout << "> New definition of " << id_token.val << " entered ..." << endl;
+                } else {
+                    cout << "> Definition of " << id_token.val << " entered ..." << endl;
+                }
+            } else {
+                throw runtime_error("> Invalid statement at parse_statement() : expected identifier but got '" + cur_token.val + "'");
+            }
+
+        // ident = exp
+        } else if (cur_token.type == TokenType::Ident 
+                   && ident_table.find(cur_token.val) != ident_table.end() 
+                   && lexer.peek_token().val == "=") {
+            token id_token = cur_token; 
+            next();
+            next();
+            result = parse_exp();
+            ident_table[id_token.val] = result;
+            cout << "> Statement executed ..." << endl;
+
+        } else {
+           throw runtime_error("> Invalid statement");
+        } 
+        return result;
+    }
+
 public:
     Parser(const string& input) : lexer(input) {
         cur_token = lexer.get_next_token();
-    }
+        is_return_bool = false;
+    } 
 
     bool is_eof() const {
         return cur_token.type == TokenType::EndOfFile;
@@ -1164,15 +1251,15 @@ public:
         // statement | bool_exp | exp 
         // first token
         // statement
-        if ((cur_token.type == TokenType::Ident && lexer.peek_token().val == ":=") 
+        if ((cur_token.type == TokenType::Ident && lexer.peek_token().val == "=") 
             || cur_token.type == TokenType::Ident && is_in(cur_token.val, data_types)) {
             result = parse_statement();
 
         } else {
-            bool is_return_bool = false;
+            is_return_bool = false;
             auto tokens = lexer.traverse();
             for (int i = 0; i < tokens.size(); i++) {
-                if (is_in(tokens[i].val, {"=", "<=", ">=", "<>", "&&", "||", "<", ">"})) {
+                if (is_in(tokens[i].val, {"<=", ">=", "!=", "==", "&&", "||", "<", ">"})) {
                     is_return_bool = true;
                     break;
                 }

@@ -1,4 +1,5 @@
 next可能不能放外面
 
 is_float有點問題
-
+ 
+管理區域變數要使用environment 使用一層層的指標指向外面

@@ -5,7 +5,6 @@
 #include <cstdlib>
 #include <cstring>
 #include <iostream>
-#include <optional>
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
@@ -15,6 +14,7 @@
 #include <fstream>
 #include <sstream>
 #include <functional>
+#include <memory>
 // #include <iterator>
 // #include <map>
 // #include <optional>
@@ -30,8 +30,10 @@ const double ErrorValue = 1e-4;
 
 struct token;
 struct variable;
+struct array;
 struct func_param;
 struct func;
+struct Environment;
 
 class Lexer;
 class Parser;
@@ -273,6 +275,14 @@ public:
         }
 
         return {rtype, result};
+    }
+
+    variable operator+(const array& arr2) {
+        if (this->type == DataType::String && arr2.type == DataType::String) {
+            return array{DataType::String, elements + arr2.elements};
+        } else {
+            throw runtime_error("Error in operator+: incompatible arrays");
+        }
     }
 
     variable operator-(const variable& var2) {
@@ -519,6 +529,14 @@ public:
     }
 };  
 
+struct array {
+    DataType type;
+    vector<string> elements;
+    int length;
+
+    array(DataType t, int len) : type(t), length(len) {}
+};
+
 struct func_param {
     DataType type;
     string name;
@@ -530,26 +548,57 @@ struct func {
     string content; // 含外層大括號
 };
 
-// 變數名: (資料型態, 變數值)
-unordered_map<string, variable> ident_table;
-// struct func {
-//     DataType return_type;
-//     std::vector<std::pair<DataType, std::string>> params; // 假設參數是這樣定義的
-//     std::string description;
+struct Environment {
+    unordered_map<string, variable> ident_table;
+    shared_ptr<Environment> parent;
 
-//     // 定義構造函數
-//     func(DataType rt, std::vector<std::pair<DataType, std::string>> p, std::string desc)
-//         : return_type(rt), params(std::move(p)), description(std::move(desc)) {}
-// };
+    // 建構子，方便直接指定外層環境
+    Environment(shared_ptr<Environment> p = nullptr) : parent(p) {}
 
-// 初始化時
-std::unordered_map<std::string, func> func_table = {
+    // 尋找變數 (Lookup) - 由內而外找
+    // 回傳指標，這樣才能夠直接修改它的值
+    variable* get(const string& name) {
+        if (ident_table.find(name) != ident_table.end()) {
+            return &ident_table[name]; // 在當前層找到
+        }
+        if (parent != nullptr) {
+            return parent->get(name); // 去外層找
+        }
+        return nullptr; // 一路找到 top 都沒有，代表未定義
+    }
+
+    bool declare(const string& name, const variable& val) {
+        if (ident_table.find(name) != ident_table.end()) {
+            return false;
+        }
+        ident_table[name] = val;
+        return true;
+    }
+
+    // 賦值更新 (Assignment) - 尋找現有變數並更新
+    bool set(const string& name, const variable& val) {
+        if (ident_table.find(name) != ident_table.end()) {
+            ident_table[name] = val;
+            return true;
+        }
+        if (parent != nullptr) {
+            return parent->set(name, val);
+        }
+        return false;
+    }
+};
+
+auto global_env = make_shared<Environment>();
+auto cur_env = global_env;
+
+unordered_map<string, func> func_table = {
     {"ListAllVariables", func({DataType::Void, {}, ""})},
     {"ListAllFunctions", func({DataType::Void, {}, ""})},
     {"ListVariable",     func({DataType::Void, {{DataType::String, "name"}}, ""})},
     {"ListFunction",     func({DataType::Void, {{DataType::String, "name"}}, ""})},
     {"Done",             func({DataType::Void, {}, ""})}
 };
+
 // =, +=, -=, *=, /=, %=, ? :, &&, ||, !, ==, !=, <, >, <=, >=, <<, >>, +, -, *, /, %
 const unordered_set<string> symbols = {
     "=", "+=", "-=", "*=", "/=", "%=", 
@@ -998,7 +1047,7 @@ private:
 
         // ident未定義且後面非賦值
         } else if (cur_token.type == TokenType::Ident 
-                   && ident_table.find(cur_token.val) == ident_table.end()
+                   && cur_env->get(cur_token.val) == nullptr
                 //    && next_token.val != "="
                    && keywords.find(cur_token.val) == keywords.end()) {
             throw runtime_error("> Undefined identifier : '" + cur_token.val + "'");
@@ -1079,13 +1128,13 @@ private:
             next(); // 通過測試
             // 取值
             // 需要錯誤處理
-            result = ident_table[id_token.val];
+            result = *cur_env->get(id_token.val);
             // cout << "result: " << id_token.val << " | " << result.val << endl;
             if (cur_token.val == "++") {
-                ident_table[id_token.val] = ident_table[id_token.val] + variable{result.type, "1"};
+                cur_env->set(id_token.val, *cur_env->get(id_token.val) + variable{result.type, "1"});
                 next();
             } else if (cur_token.val == "--") {
-                ident_table[id_token.val] = ident_table[id_token.val] - variable{result.type, "1"};
+                cur_env->set(id_token.val, *cur_env->get(id_token.val) - variable{result.type, "1"});
                 next();
             }
             
@@ -1234,10 +1283,11 @@ private:
             while (cur_token.val == ">>") {
                 next();
                 if (cur_token.type == TokenType::Ident) {
-                    if (ident_table.find(cur_token.val) == ident_table.end()) {
+                    if (cur_env->get(cur_token.val) == nullptr) {
                         throw runtime_error("> Invalid IO statement: identifier not found");
                     }
-                    cin >> ident_table[cur_token.val].val;
+                    // 目前沒有實作cin，所以先跳過
+                    // cin >> cur_env->get(cur_token.val)->val;
                     next();
                 } else {
                     throw runtime_error("> Invalid IO statement: unexpected token");
@@ -1254,7 +1304,7 @@ private:
             while (cur_token.val == "<<") {
                 next();
                 if (cur_token.type == TokenType::Ident) {
-                    if (ident_table.find(cur_token.val) == ident_table.end()) {
+                    if (cur_env->get(cur_token.val) == nullptr) {
                         throw runtime_error("> Invalid IO statement: identifier not found");
                     }
                     // cout << ident_table[cur_token.val].val;
@@ -1326,13 +1376,21 @@ private:
     void parse_block() {
         // <Block> ::= "{" <Statement> "}" | "{" "}"
         // 處理 block statement
-        if (cur_token.val == "{") {
-            next();
-            while (cur_token.val != "}") {
-                parse_statement();
+        auto new_env = make_shared<Environment>(cur_env);
+        cur_env = new_env;
+        try {
+            if (cur_token.val == "{") {
+                next();
+                while (cur_token.val != "}") {
+                    parse_statement();
+                }
+                next();
             }
-            next();
+        } catch (runtime_error& e) {
+            cur_env = cur_env->parent;
+            throw runtime_error("> Invalid block statement: " + string(e.what()));
         }
+        cur_env = cur_env->parent;
     }
 
     ReturnState parse_variable_declaration() {
@@ -1344,19 +1402,19 @@ private:
         if (cur_token.val != ";") {
             throw runtime_error("> Invalid variable declaration: expected ;, got " + cur_token.val);
         }
-        if (ident_table.find(name) != ident_table.end()) {
+        if (cur_env->get(name) != nullptr) {
             state = States::NewDefinition;
         }
         if (type == DataType::String) {
-            ident_table[name] = {type, ""};
+            cur_env->declare(name, variable{type, ""});
         } else if (type == DataType::Char) {
-            ident_table[name] = {type, "\0"};
+            cur_env->declare(name, variable{type, "\0"});
         } else if (type == DataType::Bool) {
-            ident_table[name] = {type, "false"};
+            cur_env->declare(name, variable{type, "false"});
         } else if (type == DataType::Int) {
-            ident_table[name] = {type, "0"};
+            cur_env->declare(name, variable{type, "0"});
         } else if (type == DataType::Float) {
-            ident_table[name] = {type, "0.0"};
+            cur_env->declare(name, variable{type, "0.0"});
         } else {
             throw runtime_error("> Invalid variable declaration: expected type, got " + cur_token.val);
         }
@@ -1508,11 +1566,11 @@ private:
         
         // ident = exp
         } else if (cur_token.type == TokenType::Ident && lexer.peek_token().val == "="
-                   && ident_table.find(cur_token.val) != ident_table.end()) {
+                   && cur_env->get(cur_token.val) != nullptr) {
             token id_token = cur_token; 
             next(2);
             variable result = parse_bool_exp();
-            ident_table[id_token.val] = result;
+            cur_env->set(id_token.val, result);
         
         // if
         } else if (cur_token.val == "if") {
@@ -1523,6 +1581,7 @@ private:
         // block
         } else if (cur_token.val == "{") {
             parse_block();
+            return return_state; // 大括號後statement就結束了
         // cin / cout
         } else if (cur_token.val == "cin" || cur_token.val == "cout") {
             parse_io(cur_token.val);
@@ -1576,10 +1635,6 @@ public:
         // cout << "\ncur_token.type: " << enum_to_TokenType(cur_token.type) << endl;
         if (cur_token.type == TokenType::EndOfFile) {
             return;
-        // } else if (is_in(cur_token.val, symbols)){
-        //     throw runtime_error("> 9Unexpected token : '" + cur_token.val + "'");
-        // } else {
-        //     throw runtime_error("> 3Unrecognized token with first char : '" + cur_token.val + "'");
         }
     }
 };
@@ -1588,7 +1643,7 @@ public:
 
 void ListAllVariables(const vector<variable>& variables) {
     vector<string> var_names;
-    for (const auto& pair : ident_table) {
+    for (const auto& pair : cur_env->ident_table) {
         var_names.push_back(pair.first);
     }
     sort(var_names.begin(), var_names.end());
@@ -1622,8 +1677,8 @@ void ListAllFunctions(const vector<variable>& functions) {
 void ListVariable(const vector<variable>& variables) {
 
     string name = format_params(func_table["ListVariable"].params, variables)["name"].val;
-    if (ident_table.find(name) != ident_table.end()) {
-        variable var = ident_table[name];
+    if (cur_env->get(name) != nullptr) {
+        variable var = *cur_env->get(name);
         cout << "> " << enum_to_DataType(var.type) << " " << name << " ;" << endl;
         // cout << "Statement executed ..." << endl;
     } else {

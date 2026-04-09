@@ -1,0 +1,123 @@
+/* 程式與定義 (Program & Definitions) */
+Program                             : { GlobalDefinition | Statement }
+/* Example: int x = 1; void main() { print(x); } */
+
+GlobalDefinition                    : DataType Identifier VariableDeclaration ';'
+                                    | DataType Identifier FunctionDefinition
+                                    | VOID Identifier FunctionDefinition
+/* Example: int i, j[10]; */
+/* Example: void main() { ... } */
+
+LocalDeclaration                    : DataType Identifier VariableDeclaration ';'
+/* Example: { ... int i, j[10]; ... } */
+
+VariableDeclaration : [ '[' Constant ']' ] { ',' Identifier [ '[' Constant ']' ] }
+/* Example: [10], y, z[5] */
+
+FunctionDefinition                  : '(' [ VOID | FormalParameters ] ')' CompoundStatement
+/* Example: (int a, float b[5])     { ... } */
+
+FormalParameters                    : DataType [ '&' ] Identifier [ '[' Constant ']' ] 
+                                    { ',' DataType [ '&' ] Identifier [ '[' Constant ']' ] }
+/* Example: int &a, char s[30] (此文法下不支援傳入沒有預設大小的陣列) */
+
+DataType                            : INT | CHAR | FLOAT | STRING | BOOL
+/* Example: int, bool */
+
+// ==========================================================================================
+
+/* 區塊與陳述句 (Statements) */
+CompoundStatement                   : '{' { LocalDeclaration | Statement } '}'
+/* Example: { int x; x = 5; } */
+
+Statement                           : ';' 
+                                    | Expression ';' 
+                                    | RETURN [ Expression ] ';'
+                                    | CompoundStatement
+                                    | IF '(' Expression ')' Statement [ ELSE Statement ]
+                                    | WHILE '(' Expression ')' Statement
+                                    | DO Statement WHILE '(' Expression ')' ';'
+/* Example: if (a > b) return a; else return b; */
+
+// ==========================================================================================
+
+/* 基礎表達式 (Basic Expressions) */
+Expression                          : BasicExpression { ',' BasicExpression }
+/* Example: x = 1, y = 2, z = 3 */
+
+BasicExpression                     : Identifier [ '[' Expression ']' ] AssignmentOperator BasicExpression 
+                                    | ConditionalExpression
+/* Example: x = 10 或 arr[5] += 20 (賦值操作) */
+/* Example: func(a, b) || z (邏輯操作) */
+/* Example: ++i 或 --arr[0] (前置遞增/減) */
+/* Example: arr[i]++ * 2 (後置遞增/減與算術) */
+/* Example: - ! + x > 0 (單元與關係運算) */
+/* Example: 3.14 * (a + b) (常數與括號) */
+
+Parameters                          : BasicExpression { ',' BasicExpression }
+/* Example: 10, a + b, "Hello" */
+
+AssignmentOperator                  : '=' | '*=' | '/=' | '%=' | '+=' | '-='
+/* Example: =, +=, %= */
+
+Sign                                : '+' | '-' | '!'
+/* Example: +, -, ! */
+
+// ==========================================================================================
+
+/* 運算子優先級展開 (Operator Precedence Expressions) */
+ConditionalExpression               : LogicalOR_Expression [ '?' BasicExpression ':' BasicExpression ]
+/* Example: || b ? 1 : 0 */
+
+LogicalOR_Expression                : LogicalAND_Expression { '||' LogicalAND_Expression }
+/* Example: || x && y */
+
+LogicalAND_Expression               : BitwiseOR_Expression { '&&' BitwiseOR_Expression }
+/* Example: a | b && c | d */
+
+BitwiseOR_Expression                : BitwiseXOR_Expression { '|' BitwiseXOR_Expression }
+/* Example: a ^ b | c */
+
+BitwiseXOR_Expression               : BitwiseAND_Expression { '^' BitwiseAND_Expression }
+/* Example: a & b ^ c */
+
+BitwiseAND_Expression               : Equality_Expression { '&' Equality_Expression }
+/* Example: a == b & c != d */
+
+Equality_Expression                 : Relational_Expression { ( '==' | '!=' ) Relational_Expression }
+/* Example: a < b == c > d */
+
+Relational_Expression               : Shift_Expression { ( '<' | '>' | '<=' | '>=' ) Shift_Expression }
+/* Example: x << 2 < y >> 1 */
+
+Shift_Expression                    : Additive_Expression { ( '<<' | '>>' ) Additive_Expression }
+/* Example: a + b << c - d */
+
+Additive_Expression                 : Multiplicative_Expression { ( '+' | '-' ) Multiplicative_Expression }
+/* Example: a * b + c / d */
+
+Multiplicative_Expression           : Unary_Expression { ( '*' | '/' | '%' ) Unary_Expression }
+/* Example: !x * y */
+
+
+/* 單元運算式 (Unary Expressions) */
+Unary_Expression                    : Sign { Sign } SignedUnary_Expression 
+                                    | UnsignedUnary_Expression 
+                                    | ( '++' | '--' ) Identifier [ '[' Expression ']' ]
+/* Example: - - ! x */
+/* Example: x[0]++ */
+/* Example: ++arr[i] */
+
+SignedUnary_Expression              : Identifier [ '(' [ Parameters ] ')' | '[' Expression ']' ] 
+                                    | Constant 
+                                    | '(' Expression ')'
+/* Example: func(a) 或 arr[10] */
+/* Example: 42, 3.14, 'a', "OurC", true */
+/* Example: (a + b) */
+
+UnsignedUnary_Expression            : Identifier [ '(' [ Parameters ] ')' | [ '[' Expression ']' ] [ '++' | '--' ] ]
+                                    | Constant 
+                                    | '(' Expression ')'
+/* Example: i++ 或 arr[i]-- */
+/* Example: 100 */
+/* Example: (x * y) */

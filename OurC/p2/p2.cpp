@@ -1,4 +1,4 @@
-#include <cctype>
+﻿#include <cctype>
 #include <cmath>
 #include <cstddef>
 #include <cstdio>
@@ -572,13 +572,15 @@ struct Environment {
 auto global_env = make_shared<Environment>();
 auto cur_env = global_env;
 
-unordered_map<string, Function> func_table = {
+unordered_map<string, Function> builtin_func_table = {
     {"ListAllVariables", Function({DataType::Void, {}, ""})},
     {"ListAllFunctions", Function({DataType::Void, {}, ""})},
     {"ListVariable", Function({DataType::Void, {{DataType::String, "name"}}, ""})},
     {"ListFunction", Function({DataType::Void, {{DataType::String, "name"}}, ""})},
     {"Done", Function({DataType::Void, {}, ""})}
 };
+
+unordered_map<string, Function> func_table;
 
 // =, +=, -=, *=, /=, %=, ? :, &&, ||, !, ==, !=, <, >, <=, >=, <<, >>, +, -, *,
 // /, %
@@ -756,22 +758,27 @@ unordered_map<string, Variable> format_params(const vector<FunctionParam> &param
 
 class Lexer {
 private:
+    struct Checkpoint {
+        size_t idx;
+        size_t last_token_start_idx;
+        int cur_line;
+        int last_skipped_newline_count;
+    };
+
     const string text;
-    vector<int> checkpoints;
+    vector<Checkpoint> checkpoints;
     size_t idx = 0;
     size_t last_token_start_idx = 0;
     int cur_line = 1;
-    bool request_reset_line = false;
+    int last_skipped_newline_count = 0;
 
     /* 目錄
     Token get_a_token(int skip_tokens = 1);
     Token get_next_token(int skip_tokens = 1);
     Token peek_token(int skip_tokens = 1);
-    vector<Token> traverse();
     string get_rest_str();
     void skip_to_newline();
     void reset_line();
-    void skip_a_block();
     string get_a_block();
     string pretty_print_block();
     void push_checkpoint();
@@ -783,54 +790,41 @@ private:
     // 只要一個statement結束就是一個新的statement開始 包含空白 換行 註解等
     Token get_a_token(int skip_tokens = 1) {
         Token tk;
+        int skipped_newlines = 0;
         for (int i = 0; i < skip_tokens; i++) {
-            // 同一個迴圈內，不斷交替跳過「空白」與「註解」，直到遇見真正的 Token
+            skipped_newlines = 0;
             while (idx < text.length()) {
                 if (isspace(text[idx])) {
                     if (text[idx] == '\n') {
-                        // 如果有請求重置行數，則在遇到第一次'\n'時重置行數，否則加1
-                        if (request_reset_line) {
-                            cur_line = 1;
-                            request_reset_line = false;
-                        } else {
-                            cur_line++;
-                        }
+                        cur_line++;
+                        skipped_newlines++;
                     }
                     idx++;
-                    // print_cur_line_content();
                 } else if (idx + 1 < text.length() && text[idx] == '/' && text[idx + 1] == '/') {
-                    // 跳過整行註解
                     while (idx < text.length() && text[idx] != '\n') {
                         idx++;
                     }
-                    // 如果結尾是換行，一併吃掉並視情況加行號
                     if (idx < text.length() && text[idx] == '\n') {
-                        if (request_reset_line) {
-                            cur_line = 1;
-                            request_reset_line = false;
-                        } else {
-                            cur_line++;
-                        }
+                        cur_line++;
+                        skipped_newlines++;
                         idx++;
                     }
                 } else {
-                    // 既不是空白也不是註解，代表遇到真正的 Token
                     break;
                 }
             }
-            // 這時候 idx 會精準指在 Token 的第一個字元上
+
             last_token_start_idx = idx;
             if (idx >= text.length()) {
                 tk = {TokenType::EndOfFile, ""};
                 tk.line = cur_line;
+                last_skipped_newline_count = skipped_newlines;
                 return tk;
             }
 
-            // char
             if (text[idx] == '\'') {
                 string chr_str;
                 idx++;
-                // 此時檢查斜線後是否有東西
                 if (idx < text.length() && text[idx] == '\\') {
                     chr_str += '\\';
                     idx++;
@@ -848,8 +842,6 @@ private:
                     throw runtime_error("Line " + to_string(cur_line) + " : unexpected token : '''");
                 idx++;
                 tk = {TokenType::Chr, chr_str};
-
-            // string
             } else if (text[idx] == '"') {
                 string str_str;
                 idx++;
@@ -871,50 +863,34 @@ private:
                 if (text[idx] != '"')
                     throw runtime_error("Line " + to_string(cur_line) + " : unexpected token : '\"'");
                 idx++;
-                // cout << str_str << endl;
                 tk = {TokenType::Str, str_str};
-
-            // num (以小數點切割)
             } else if (isdigit(text[idx]) || text[idx] == '.') {
                 string num_str;
 
                 if (text[idx] == '.') {
-                    // Always treat '.' as a standalone Point token
                     tk = {TokenType::Point, "."};
                     idx++;
                 } else if (isdigit(text[idx])) {
-                    // If it starts with number
                     while (idx < text.length() && isdigit(text[idx])) {
                         num_str += text[idx];
                         idx++;
                     }
                     tk = {TokenType::Number, num_str};
                 }
-
-            // boolean
             } else if (text.compare(idx, 4, "true") == 0) {
                 idx += 4;
                 tk = {TokenType::Boolean, "true"};
-
             } else if (text.compare(idx, 5, "false") == 0) {
                 idx += 5;
                 tk = {TokenType::Boolean, "false"};
-
-            // ident
             } else if (isalpha(text[idx]) || text[idx] == '_') {
                 string ident_str;
                 while (idx < text.length() && (isalnum(text[idx]) || text[idx] == '_')) {
                     ident_str += text[idx];
                     idx++;
                 }
-                // 處理bool
                 tk = {TokenType::Ident, ident_str};
-
-            // operators
-            // 需要大幅修改邏輯
             } else {
-                // 長度為1或2 Assign Operator Sign LParen RParen
-                // 特別處理長度為2的運算符即可 剩下歸類於長度為1
                 if (idx + 1 < text.length()) {
                     string s = string("") + text[idx] + text[idx + 1];
 
@@ -935,7 +911,6 @@ private:
                 }
                 if (idx < text.length()) {
                     char c = text[idx];
-                    // 給parser解析 +- sign/operator
                     if (c == '+') {idx += 1; tk = {TokenType::SignOperator, "+"}; continue;}
                     else if (c == '-') {idx += 1; tk = {TokenType::SignOperator, "-"}; continue;}
                     else if (c == '*') {idx += 1; tk = {TokenType::Operator, "*"}; continue;}
@@ -953,8 +928,8 @@ private:
                     else if (c == ',') {idx += 1; tk = {TokenType::Comma, ","}; continue;}
                     else if (c == '?') {idx += 1; tk = {TokenType::Operator, "?"}; continue;}
                     else if (c == ':') {idx += 1; tk = {TokenType::Operator, ":"}; continue;}
-                    else if (c == ';') {idx += 1; tk = {TokenType::Semicolon, ";"}; continue;} 
-                    else {idx += 1; tk = {TokenType::Undefined, string("") + c}; continue;} // 返回未定義token
+                    else if (c == ';') {idx += 1; tk = {TokenType::Semicolon, ";"}; continue;}
+                    else {idx += 1; tk = {TokenType::Undefined, string("") + c}; continue;}
                 } else {
                     string s;
                     while (!strchr("+-*/><()[]{}=", text[idx])) {
@@ -966,9 +941,9 @@ private:
             }
         }
         tk.line = cur_line;
+        last_skipped_newline_count = skipped_newlines;
         return tk;
     }
-
 public:
     Lexer(const string &input, int start_line = 1) 
         : text(input), idx(0), cur_line(start_line) {}
@@ -984,39 +959,23 @@ public:
     }
 
     Token get_next_token(int skip_tokens = 1) {
-        // get token 並改變idx
+        // get token 同時修改idx
         Token tk = get_a_token(skip_tokens);
         // cout << "tk: " << tk.val << endl;
         return tk;
     }
 
     Token peek_token(int skip_tokens = 1) {
-        // get token 但不改變idx
-        int start_idx = idx;
+        size_t start_idx = idx;
         int start_line = cur_line;
-        bool start_request_reset_line = request_reset_line;
+        size_t start_last_token_start_idx = last_token_start_idx;
+        int start_last_skipped_newline_count = last_skipped_newline_count;
         Token tk = get_a_token(skip_tokens);
         idx = start_idx;
         cur_line = start_line;
-        request_reset_line = start_request_reset_line;
+        last_token_start_idx = start_last_token_start_idx;
+        last_skipped_newline_count = start_last_skipped_newline_count;
         return tk;
-    }
-
-    vector<Token> traverse() {
-        // get tokens 但不改變idx
-        int start_idx = idx;
-        int start_line = cur_line;
-        bool start_request_reset_line = request_reset_line;
-        Token tk = get_next_token();
-        vector<Token> tks;
-        while (tk.type != EndOfFile) {
-            tks.push_back(tk);
-            tk = get_next_token();
-        }
-        idx = start_idx;
-        cur_line = start_line;
-        request_reset_line = start_request_reset_line;
-        return tks;
     }
 
     string get_rest_str() {
@@ -1036,25 +995,15 @@ public:
     }
 
     void reset_line() {
-        // 重置行數
         cur_line = 1;
+        last_skipped_newline_count = 0;
     }
 
-    void skip_a_block() {
-        Token tk = peek_token();
-        if (tk.val == "{") {
-            int brace_count = 0;
-            while (idx < text.length()) {
-                if (text[idx] == '{')
-                    brace_count++;
-                else if (text[idx] == '}')
-                    brace_count--;
-                if (brace_count == 0)
-                    break;
-                idx++;
-            }
-        } else {
-            throw runtime_error("Line " + to_string(tk.line) + " : unexpected token : '" + tk.val + "'");
+    void finish_outer_statement(Token &next_token) {
+        int next_line = max(1, last_skipped_newline_count);
+        cur_line = next_line;
+        if (next_token.type != TokenType::EndOfFile) {
+            next_token.line = next_line;
         }
     }
 
@@ -1068,6 +1017,8 @@ public:
                     brace_count++;
                 else if (text[idx] == '}')
                     brace_count--;
+                else if (text[idx] == '\n')
+                    cur_line++;
                 block_str += text[idx];
                 idx++;
                 if (brace_count == 0)
@@ -1078,38 +1029,93 @@ public:
             throw runtime_error("Line " + to_string(tk.line) + " : unexpected token : '" + tk.val + "'");
         }
     }
-
     string pretty_print_block() {
         Token tk = peek_token();
-        if (tk.val == "{") {
-            int brace_count = 0;
-            string block_str;
-            idx++;
-            while (idx < text.length()) {
-                if (text[idx] == '{')
-                    brace_count++;
-                else if (text[idx] == '}')
-                    brace_count--;
-                for (int i = 0; i < brace_count; i++) {
-                    block_str += "  ";
-                }
-                block_str += text[idx];
-                if (brace_count == 0)
-                    break;
-                idx++;
-            }
-            return block_str;
-        } else {
+        if (tk.val != "{") {
             throw runtime_error("Line " + to_string(tk.line) + " : unexpected token : '" + tk.val + "'");
         }
+    
+        int indent_level = 0;
+        string result = "";
+        bool is_new_line = true; // 標記目前是否處於新的一行 (用以判斷縮排位置)
+        TokenType prev_type = TokenType::Undefined;
+        string prev_val = "";
+        int brace_count = 0;
+    
+        while (true) {
+            tk = get_next_token(); // 取得下一個 Token (會自動跳過註解與空格)
+
+            if (tk.type == TokenType::EndOfFile) break;
+    
+            if (tk.val == "{") {
+                if (!is_new_line) result += " ";
+                result += "{\n";
+                brace_count++;
+                indent_level++;
+                is_new_line = true;
+                
+            } else if (tk.val == "}") {
+                brace_count--;
+                indent_level--;
+                if (!is_new_line) result += "\n";
+                
+                // 根據當前層級縮排 (每層 2 個空格)
+                result += string(indent_level * 2, ' ') + "}";
+                
+                if (brace_count == 0) {
+                    break; // 大括號已經閉合，結束解析
+                } else {
+                    result += "\n";
+                    is_new_line = true;
+                }
+                
+            } else if (tk.val == ";") {
+                if (!is_new_line) result += " ";
+                result += ";\n"; // 分號後強制換行
+                is_new_line = true;
+                
+            } else {
+                if (is_new_line) {
+                    // 如果是新的行，添加縮排
+                    result += string(indent_level * 2, ' ');
+                    is_new_line = false;
+                } else {
+                    // 判斷 Token 之間是否需要一空格
+                    bool need_space = true;
+                    
+                    // 特殊處理函數呼叫的情況：例如 AddTwo(x) 的 '(' 前面不加空格
+                    if (tk.val == "(" && prev_type == TokenType::Ident) {
+                        // 排除 if, while, for 等關鍵字的例外，例如 if (x > 0)
+                        if (prev_val != "if" && prev_val != "while" && prev_val != "for") {
+                            need_space = false;
+                        }
+                    }
+                    if (need_space) result += " ";
+                }
+                result += tk.val;
+            }
+            
+            // 紀錄最後一個 Token 的資訊，以供下一次的格式判斷
+            prev_type = tk.type;
+            prev_val = tk.val;
+        }
+        
+        return result;
     }
 
-    void push_checkpoint() { checkpoints.push_back(idx); }
+    void push_checkpoint() {
+        checkpoints.push_back({idx, last_token_start_idx, cur_line, last_skipped_newline_count});
+    }
 
     void pop_checkpoint() { checkpoints.pop_back(); }
 
-    void back_to_checkpoint() { idx = checkpoints.back(); }
-
+    void back_to_checkpoint() {
+        const Checkpoint &checkpoint = checkpoints.back();
+        idx = checkpoint.idx;
+        last_token_start_idx = checkpoint.last_token_start_idx;
+        cur_line = checkpoint.cur_line;
+        last_skipped_newline_count = checkpoint.last_skipped_newline_count;
+    }
     void find_first_of(const string &target) {
         size_t result = text.find_first_of(target, idx);
         if (result != string::npos) {
@@ -1129,7 +1135,6 @@ public:
         cout << endl; 
     }
 
-    void schedule_reset_line() { request_reset_line = true; }
 };
 
 class Parser {
@@ -1141,64 +1146,97 @@ private:
     bool require_semicolon = true;
     const int MAX_STEPS = 100;  
 
-    int recursion_depth = 0; // 單次函數調用即為一層 需要實裝至function calling
+    int recursion_depth = 0; // 遞迴深度（暫時設為一級，需要實作到function calling）
     DataType current_return_type = DataType::Void; 
 
-    bool dry_run = false; // <-- 新增：空轉模式標記
+    bool dry_run = false; // <-- 關鍵點：跳過賦值動作
 
-    /* 目錄
+/* 目錄 (重構版)
     struct ReturnException;
     void next(int skip_tokens = 1, bool is_def = false)
-    Variable parse_factor()
-    Variable parse_term()
-    Variable parse_exp()
-    Variable parse_relation_exp()
-    Variable parse_equal_exp()
-    Variable parse_and_exp()
-    Variable parse_or_exp()
-    Variable parse_bool_exp()
-    Variable parse_io(const string &type)
-    bool parse_condition()
+
+    // ==========================================
+    // 1. 運算式解析 (Expression Parsing) - 由下而上嚴格對應優先級
+    // ==========================================
+    [修改] Variable parse_unary_exp()         // 原 parse_factor。需加入：負號、!、前/後置 ++/--，以及陣列 [ ] 取值。
+    [新增] Variable parse_multiplicative_exp()// 取代 parse_term。需加入：取餘數 '%'。
+    [新增] Variable parse_additive_exp()      // 取代原 parse_exp 中處理加減法的部分。
+    [新增] Variable parse_shift_exp()         // 新增：處理左移 '<<' 與右移 '>>'。
+    [新增] Variable parse_relational_exp()    // 取代 parse_relation_exp。專注處理 '<', '>', '<=', '>='。
+    [新增] Variable parse_equality_exp()      // 取代 parse_equal_exp。專注處理 '==', '!='。
+    [新增] Variable parse_bitwise_and_exp()   // 新增：處理位元 AND '&'。
+    [新增] Variable parse_bitwise_xor_exp()   // 新增：處理位元 XOR '^'。
+    [新增] Variable parse_bitwise_or_exp()    // 新增：處理位元 OR '|'。
+    [修改] Variable parse_logical_and_exp()   // 原 parse_and_exp。處理 '&&'。
+    [修改] Variable parse_logical_or_exp()    // 原 parse_or_exp。處理 '||'。
+    [修改] Variable parse_conditional_exp()   // 原 parse_bool_exp。專注處理三元運算子 '?' ':'。
+    [新增] Variable parse_basic_exp()         // 新增：文法表中的 BasicExpression。負責處理賦值 ('=', '+=', etc.) 及陣列元素賦值。
+    [新增] Variable parse_expression()        // 新增：文法表頂層。處理逗號運算子 ',' 串聯多個 BasicExpression。
+
+    // ==========================================
+    // 2. 控制流與陳述句 (Control Flow & Statements)
+    // ==========================================
+    [移除] Variable parse_io(const string &type) // 移除：嚴格文法不包含 cin / cout。
+    [修改] bool parse_condition()             // 修改：括號內需改為呼叫頂層的 parse_expression()。
     void skip_token()
     void process_parens_in_skip()
-    void skip_statement()
+    [修改] void skip_statement()              // 修改：內部需加入對 do-while 結構的略過邏輯。
     void parse_if_else()
     void parse_while()
+    [新增] void parse_do_while()              // 新增：實作文法表中的 do-while 迴圈。
     void parse_block()
+
+    // ==========================================
+    // 3. 函式與變數宣告 (Declarations)
+    // ==========================================
     void parse_function_block(string block_str, unordered_map<string, Variable> formatted_params)
-    vector<StatePair> parse_variable_declaration(DataType type = DataType::Void)
-    vector<FunctionParam> parse_function_declaration_params()
+    [修改] vector<StatePair> parse_variable_declaration(DataType type = DataType::Void) 
+           // 修改：確保符合文法「宣告時不允許初始化」的規則（也就是不能寫 int x = 5;）。
+    [修改] vector<FunctionParam> parse_function_declaration_params() 
+           // 修改：文法表 FormalParameters 支援參照（&）與陣列（[ ]），需加入對應解析。
     vector<Variable> parse_function_params()
-    StatePair parse_function_declaration()
-    void parse_function_call()
+    [修改] StatePair parse_function_declaration() 
+           // 修改：確保對應文法，可能需要相容 void 作為回傳型態或參數的特殊處理。
+    [修改] void parse_function_call()         
+           // 修改：呼叫時的引數傳遞，需相容陣列與參照型態的傳遞。
     void parse_return(DataType return_type)
-    ReturnState parse_statement(bool sub_statement = false)
+    [修改] ReturnState parse_statement(bool sub_statement = false) 
+           // 修改核心：移除此處所有對於「=」的判斷與賦值操作，將權力下放給 parse_basic_exp()。
+
+    // ==========================================
+    // 4. 基礎 Parser 方法 (Base Methods)
+    // ==========================================
     Parser(const string &input)
     bool is_eof() const
     string get_rest_str()
     void skip_to_newline()
     void parse_cmd()
-    */
+*/
 
     struct ReturnException {
         Variable value;
     };
 
     void next(int skip_tokens = 1, bool is_def = false) {
-        // 如果 "下一個" 不是預期的 token 就根據問題丟出報錯 只處理也只能處理簡單的報錯
+        // 如果 "下一個" 不是預期的 token 就在這階段報錯（這算是屬於較淺層的報錯）
         auto ue_types = unexpected_types[cur_token.type];
         Token next_token = lexer.peek_token(skip_tokens);
 
-        // 符號未定義
+        // 第一階段報錯
         if (cur_token.type == TokenType::Undefined) {
             throw runtime_error("Line " + to_string(cur_token.line) + " : unrecognized token with first char : '" + cur_token.val + "'");
 
-        // 後接非法符號
+        // 後隨型態報錯
         } else if (find(ue_types.begin(), ue_types.end(), next_token.type) != ue_types.end()) {
             throw runtime_error("Line " + to_string(next_token.line) + " : unexpected token : '" + next_token.val + "'");
 
-        // ident未定義
-        } else if (cur_token.type == TokenType::Ident && (cur_env->get(cur_token.val) == nullptr || is_def) && keywords.find(cur_token.val) == keywords.end()) {
+        // ident第一階段報錯
+        } else if (cur_token.type == TokenType::Ident && 
+            (cur_env->get(cur_token.val) == nullptr || is_def) && 
+            keywords.find(cur_token.val) == keywords.end() &&
+            func_table.find(cur_token.val) == func_table.end() &&         // 加入自定義函數檢查
+            builtin_func_table.find(cur_token.val) == builtin_func_table.end()) // 加入內建函數檢查
+        {
             throw runtime_error("Line " + to_string(cur_token.line) + " : undefined identifier : '" + cur_token.val + "'");
         }
         prev_token = cur_token;
@@ -1289,9 +1327,9 @@ private:
                 result = parse_function_call();
             } else {
                 Token id_token = cur_token;
-                next(); // 通過測試
-                // 取值
-                // 需要錯誤處理
+                next(); // 略過標識符
+                // 拿值
+                // 需要錯誤導向
                 result = *cur_env->get(id_token.val);
                 // cout << "result: " << id_token.val << " | " << result.val << endl;
                 if (cur_token.val == "++") {
@@ -1401,7 +1439,7 @@ private:
     }
   
     Variable parse_equal_exp() {
-        // == <>
+        // == !=
         Variable result = parse_relation_exp();
         if (cur_token.type == TokenType::EndOfFile)
             return result;
@@ -1422,14 +1460,14 @@ private:
   
     Variable parse_and_exp() {
         // &&
-        Variable result = parse_relation_exp();
+        Variable result = parse_equal_exp();
         if (cur_token.type == TokenType::EndOfFile)
             return result;
 
         while (is_in(cur_token.val, {"&&"})) {
             if (cur_token.val == "&&") {
                 next();
-                result = result && parse_relation_exp();
+                result = result && parse_equal_exp();
             }
         }
         return result;
@@ -1452,7 +1490,7 @@ private:
 
     Variable parse_bool_exp() { 
         Variable result = parse_or_exp();
-        // 優先權低於 || 僅次於 = 所以可將其實作於此處
+        // 已經遍歷了 || 活性最高，故可以將其視為這類表達式
         if (cur_token.val == "?") {
             next();
             Variable true_val = parse_bool_exp(); 
@@ -1494,7 +1532,7 @@ private:
                             " : undefined identifier : '" + cur_token.val + "'"
                         );
                     }
-                    // 目前沒有實作cin，所以先跳過
+                    // 目前沒實作cin，所以先空著
                     /*
                     if (target_var->type == DataType::Int) {
                         int input_val;
@@ -1581,12 +1619,9 @@ private:
     }
 
     void skip_statement() {
-        // 記錄起始位置
-        // 從當前token頭開始才不會漏掉這個token(原本預設在尾部才開始)
-        size_t start_idx = lexer.get_last_token_start_idx(); 
+        size_t start_idx = lexer.get_last_token_start_idx();
         int start_line = cur_token.line;
 
-        // 保留原本用來「計算大括號和分號」以跳過區塊的邏輯
         if (cur_token.val == "{") {
             parens_stack.push_back(cur_token);
             skip_token();
@@ -1594,9 +1629,8 @@ private:
                 process_parens_in_skip();
                 skip_token();
             }
-        // 處理if else
         } else if (cur_token.val == "if") {
-            skip_token(); 
+            skip_token();
             if (cur_token.val == "(") {
                 parens_stack.push_back(cur_token);
                 skip_token();
@@ -1610,7 +1644,6 @@ private:
                 skip_token();
                 skip_statement();
             }
-        // 處理while
         } else if (cur_token.val == "while") {
             skip_token();
             if (cur_token.val == "(") {
@@ -1622,7 +1655,6 @@ private:
                 }
             }
             skip_statement();
-        // 處理單行 statement
         } else {
             while (cur_token.val != ";" && cur_token.type != TokenType::EndOfFile) {
                 process_parens_in_skip();
@@ -1635,67 +1667,56 @@ private:
             }
         }
 
-        // 記錄結束位置並擷取字串
         size_t end_idx = lexer.get_idx();
         string skipped_code = lexer.get_substring(start_idx, end_idx);
 
-        // 啟動暫時性 Parser 進行語法檢查
         if (!skipped_code.empty()) {
-            // 保存當前的全域環境，並加上一層防護罩
             auto old_env = cur_env;
-            cur_env = make_shared<Environment>(old_env); 
+            cur_env = make_shared<Environment>(old_env);
 
             try {
                 Parser temp_parser(skipped_code, start_line);
                 temp_parser.set_dry_run(true);
-                temp_parser.parse_statement(); // 單次解析以檢查語法 (block為一個statement)
+                temp_parser.parse_statement(false, false);
             } catch (const exception &e) {
-                // 如果抓到錯誤，恢復環境再把錯誤拋出
                 cur_env = old_env;
-                // 輸出已經為精準的絕對行號了
                 throw runtime_error(e.what());
             }
 
-            // 檢查通過，安全恢復環境
             cur_env = old_env;
         }
     }
-
     void parse_if_else() {
-        // <If-Else-Statement> ::= "if" "(" <Condition> ")" <Statement> { "else"
-        // "if" "(" <Condition> ")" <Statement> } [ "else" <Statement> ]
-        // 不論條件是否達成皆須解析Statement
-		if (cur_token.val != "if") {
+        if (cur_token.val != "if") {
             throw runtime_error("Line " + to_string(cur_token.line) + " : unexpected token : '" + cur_token.val + "'");
         }
 
         bool condition_met = false;
-        next(); // loop into "if"
+        next();
 
         bool condition = parse_condition();
 
         if (condition) {
-            parse_statement();
+            parse_statement(false, false);
             condition_met = true;
         } else {
             skip_statement();
         }
 
         while (cur_token.val == "else") {
-            next(); // skip "else"
+            next();
             if (cur_token.val == "if") {
-                next(); // skip "if"
+                next();
                 condition = parse_condition();
                 if (!condition_met && condition) {
-                    parse_statement();
+                    parse_statement(false, false);
                     condition_met = true;
                 } else {
                     skip_statement();
                 }
             } else {
-                // just "else"
                 if (!condition_met) {
-                    parse_statement();
+                    parse_statement(false, false);
                     condition_met = true;
                 } else {
                     skip_statement();
@@ -1704,25 +1725,24 @@ private:
             }
         }
     }
-
     void parse_while() {
         bool condition;
         if (cur_token.val == "while") {
-            lexer.push_checkpoint(); // ← 移到這裡：idx 在 "while" 之後、"(" 之前
-            next();                  // cur_token = "("
+            lexer.push_checkpoint();
+            next();
             condition = parse_condition();
             if (!condition) {
-                skip_statement(); // ← 條件一開始就 false 時必須跳過 block
+                skip_statement();
             }
             int execution_steps = 0;
             while (condition && execution_steps <= MAX_STEPS) {
                 execution_steps++;
-                parse_statement();
-                lexer.back_to_checkpoint(); // idx 回到 "(" 之前
-                next();                     // cur_token = "("
+                parse_statement(false, false);
+                lexer.back_to_checkpoint();
+                next();
                 condition = parse_condition();
                 if (!condition || execution_steps > MAX_STEPS) {
-                    skip_statement(); // ← 條件變 false 或超過步數時跳過 block
+                    skip_statement();
                 }
             }
             lexer.pop_checkpoint();
@@ -1730,20 +1750,15 @@ private:
             throw runtime_error("Line " + to_string(cur_token.line) + " : unexpected token : '" + cur_token.val + "'");
         }
     }
-
     void parse_block() {
-        // <Block> ::= "{" <Statement> "}" | "{" "}"
-        // 處理 block statement
         auto new_env = make_shared<Environment>(cur_env);
         cur_env = new_env;
         try {
             if (cur_token.val == "{") {
                 next();
                 while (cur_token.val != "}") {
-                    parse_statement();
+                    parse_statement(false, false);
                 }
-                // 處理完 block statement 後，重置行數
-                lexer.schedule_reset_line();
                 next();
             }
         } catch (runtime_error &e) {
@@ -1752,19 +1767,13 @@ private:
         }
         cur_env = cur_env->parent;
     }
-
     void parse_function_block(string block_str, unordered_map<string, Variable> formatted_params) {
-        // <Block> ::= "{" <Statement> { <Statement> } "}" | "{" "}"
-        // Statement 包含 function call, return, variable declaration 等
-        // 處理 block statement
         auto new_env = make_shared<Environment>(cur_env);
         cur_env = new_env;
-        // 讀取 function parameter
         for (auto &param : formatted_params) {
             cur_env->declare(param.first, param.second);
         }
 
-        // 使用一個新的 Parser 來解析專屬於這個函數的 block_str
         Parser block_parser(block_str);
         block_parser.current_return_type = this->current_return_type;
 
@@ -1772,16 +1781,15 @@ private:
             if (block_parser.cur_token.val == "{") {
                 block_parser.next();
                 while (block_parser.cur_token.val != "}" && !block_parser.is_eof()) {
-                    block_parser.parse_statement(true);
+                    block_parser.parse_statement(false, false);
                 }
             }
         } catch (...) {
             cur_env = cur_env->parent;
-            throw; // 會包含 ReturnException 拋出
+            throw;
         }
         cur_env = cur_env->parent;
     }
-
     vector<StatePair> parse_variable_declaration(DataType type = DataType::Void) {
         // cur_token is type
         // <VariableDeclaration> ::= <Type> <Ident> [ "[" <Expression> "]" ] ;
@@ -1789,7 +1797,7 @@ private:
         // , <Ident> [ "[" <Expression> "]" ] } ;
         vector<StatePair> state_pairs;
         Token id_token, mark_token;
-        // 初始化變數
+        // 基底型態
         if (is_in(cur_token.val, data_types)) {
             type = DataType_to_enum(cur_token.val);
         } else {
@@ -1814,7 +1822,7 @@ private:
             Variable var = Variable(type, "");
 
             if (mark_token.val == "[") {
-                // 此時跳三個會到exp
+                // 此階段進去看exp
                 next(3);
                 auto size_var = parse_exp().val;
                 int arr_size = 0;
@@ -1839,7 +1847,7 @@ private:
                 }
                 var.val = array_ptr;
             } else {
-                // 此時跳兩個會到標點符號
+                // 此階段跳過兩個標點符號
                 next(2);
             }
 
@@ -1861,7 +1869,7 @@ private:
 
     vector<FunctionParam> parse_function_declaration_params() {
         // <Params> ::= ( <Type> <Ident> { , <Type> <Ident> } | <Empty> )
-        // 處理宣告時的參數
+        // 定義函式的參數
         vector<FunctionParam> params;
         Token next_token1 = lexer.peek_token();
         Token next_token2 = lexer.peek_token(2);
@@ -1902,8 +1910,8 @@ private:
 
     vector<Variable> parse_function_params() {
         // <Params> ::= "(" <BoolExpression> | <Expression> { , <BoolExpression> |
-        // <Expression> } ")" | "()" ident = exp 可能為一個expression
-        // 只處理調用時的參數 用於準備輸入函數
+        // <Expression> } ")" | "()" ident = exp 可能會看成expression
+        // 被函式呼叫的參數，也就是輸入參數
         vector<Variable> params;
         Token next_token1 = lexer.peek_token();
         if (cur_token.val == "(") {
@@ -1944,7 +1952,7 @@ private:
         string block_str = lexer.get_a_block();
         cur_token = lexer.get_next_token();
         func_table[name] = Function{type, params, block_str};
-        return {name, state};
+        return {name + "()", state};
     }
 
     Variable parse_function_call() {
@@ -1968,7 +1976,7 @@ private:
             DataType old_return_type = current_return_type;
             current_return_type = func_table[function_name].return_type;
 
-            // --- 新增 dry_run 判斷 ---
+            // --- 關鍵 dry_run 判斷 ---
             if (!dry_run) {
                 try {
                     parse_function_block(func_table[function_name].content, formatted_params);
@@ -1980,7 +1988,7 @@ private:
             
             current_return_type = old_return_type; 
             
-            // 空轉時，根據返回型別給一個合法的假資料，避免後續 parse_exp 報錯
+            // 賦值時，確保回傳的型態符合基底型態，否則之後 parse_exp 會錯
             if (func_table[function_name].return_type == DataType::Void) return Variable();
             return Variable(func_table[function_name].return_type, ""); 
         } else {
@@ -1993,30 +2001,30 @@ private:
         // <Return> ::= "return" [ <BoolExpression> | <Expression> ] ";"
         next();
         Variable value;
-        // 根據返回類型解析
+        // 處理回傳型態
         if (cur_token.val != ";") {
             value = parse_bool_exp();
         }
 
-        // 檢查回傳型態並嘗試隱式轉型
+        // 檢查回傳值是否與預期相符
         if (current_return_type == DataType::Void && value.type != DataType::Void) {
             // throw runtime_error("Line " + to_string(cur_token.line) + " : void function cannot return a value");
         } else if (current_return_type != DataType::Void && value.type == DataType::Void) {
             // throw runtime_error("Line " + to_string(cur_token.line) + " : non-void function must return a value");
         } else if (current_return_type != DataType::Void && value.type != current_return_type) {
-            // 如果型態不一致，嘗試進行安全的數字轉型
+            // 如果型態不一致，嘗試進行型態轉換
             if (current_return_type == DataType::Float && value.type == DataType::Int) {
                 value = Variable(static_cast<double>(get<int>(value.val)));
             } else if (current_return_type == DataType::Int && value.type == DataType::Float) {
                 value = Variable(static_cast<int>(get<double>(value.val)));
             } else if (current_return_type == DataType::Bool && (value.type == DataType::Int || value.type == DataType::Float)) {
-                value = Variable(bool(value)); // 依賴原先類別宣告的 explicit operator bool
+                value = Variable(bool(value)); // 依賴內建型態轉換 explicit operator bool
             } else {
                 throw runtime_error("Line " + to_string(cur_token.line) + " : return type mismatch (" + enum_to_DataType(value.type) + " to " + enum_to_DataType(current_return_type) + ")");
             }
         }
 
-        // 結尾必有分號
+        // 強制完成解析
         if (cur_token.val != ";") {
             throw runtime_error("Line " + to_string(cur_token.line) + " : unexpected token : '" + cur_token.val + "'");
         }
@@ -2024,12 +2032,7 @@ private:
         throw ReturnException{value};
     }
 
-    ReturnState parse_statement(bool sub_statement = false) {
-        // sub_statement: 是否為子語句 (進入時使用一次接著不使用)
-        // <Statement> ::= <If> | <While> | <Block> | <Expr> | <FunctionCall> |
-        // 處理 <FunctionDeclaration> | <VariableDeclaration>
-        // <FunctionDeclaration> ::= <Type> <Ident> "(" <Params> {"," <Params>} ")"
-        // <Block> <VariableDeclaration> ::= <Type> <Ident> ";"
+    ReturnState parse_statement(bool sub_statement = false, bool reset_after_statement = true) {
         static const unordered_map<string, DataType> type_map = {
             {"int", DataType::Int},
             {"float", DataType::Float},
@@ -2040,27 +2043,22 @@ private:
         ReturnState return_states;
         return_states.clear();
 
-        // 如果當前排列為 <Type> <Ident>
-        // 接著 <LParen> 則為 <FunctionDeclaration>
-        // 接著 <Semicolon> <Comma> 則為 <VariableDeclaration>
         Token id_token = lexer.peek_token(1);
         string mark = lexer.peek_token(2).val;
         vector<StatePair> states;
-        // () statement (is a sub-statement)
-        // but {} statement is NOT a sub-statement!
+
         if (cur_token.val == "(") {
             next();
-            parse_statement(true);
+            parse_statement(true, false);
             if (cur_token.val != ")") {
                 throw runtime_error(
-                    "Line " + to_string(cur_token.line) + 
+                    "Line " + to_string(cur_token.line) +
                     " : unexpected token : '" + cur_token.val + "'"
                 );
             }
             return_states.push({"", State::Statement});
             require_semicolon = true;
             next();
-        // function declaration or variable declaration
         } else if (cur_token.type == TokenType::Ident &&
                    type_map.find(cur_token.val) != type_map.end() &&
                    id_token.type == TokenType::Ident &&
@@ -2074,64 +2072,52 @@ private:
                 require_semicolon = true;
             } else {
                 throw runtime_error(
-                    "Line " + to_string(cur_token.line) + 
+                    "Line " + to_string(cur_token.line) +
                     " : unexpected token : '" + cur_token.val + "'"
                 );
             }
-
-        // ident = exp
         } else if (cur_token.type == TokenType::Ident &&
                    lexer.peek_token().val == "=" &&
                    cur_env->get(cur_token.val) != nullptr) {
             Token id_token = cur_token;
             next(2);
             Variable result = parse_bool_exp();
-            // --- 新增 dry_run 判斷 ---
             if (!dry_run) {
                 cur_env->set(id_token.val, result);
             }
             return_states.push({"", State::Statement});
             require_semicolon = true;
-        // if
         } else if (cur_token.val == "if" || cur_token.val == "else") {
-            // cout << "cur_line" << cur_token.line << " | " << cur_token.val << endl;
             parse_if_else();
             return_states.push({"", State::Statement});
-            return return_states;
-        // while
+            require_semicolon = false;
         } else if (cur_token.val == "while") {
             parse_while();
             return_states.push({"", State::Statement});
-            return return_states;
-        // cin / cout
+            require_semicolon = false;
         } else if (cur_token.val == "cin" || cur_token.val == "cout") {
             parse_io(cur_token.val);
             return_states.push({"", State::Statement});
             require_semicolon = true;
-        // function call
         } else if (cur_token.type == TokenType::Ident &&
                    func_table.find(cur_token.val) != func_table.end()) {
             parse_function_call();
             return_states.push({"", State::Statement});
             require_semicolon = true;
-        // block
         } else if (cur_token.val == "{") {
             parse_block();
             return_states.push({"", State::Statement});
-            return return_states; // 大括號後statement就結束了
-        // return
+            require_semicolon = false;
         } else if (cur_token.val == "return") {
             parse_return();
             return_states.push({"", State::Statement});
             return return_states;
-        // expression
         } else {
             parse_bool_exp();
             return_states.push({"", State::Statement});
             require_semicolon = true;
         }
-        // check semicolon
-        // cout << cur_token.val << " | " << cur_token.line << endl;
+
         if (!sub_statement) {
             if (require_semicolon && cur_token.type != TokenType::Semicolon) {
                 throw runtime_error(
@@ -2139,15 +2125,21 @@ private:
                     " : unexpected token : '" + cur_token.val + "'"
                 );
             } else if (cur_token.type == TokenType::Semicolon) {
-                lexer.schedule_reset_line();
-                next();
+                if (reset_after_statement) {
+                    prev_token = cur_token;
+                    cur_token = lexer.get_next_token(1);
+                    lexer.finish_outer_statement(cur_token);
+                } else {
+                    next();
+                }
+            } else if (reset_after_statement) {
+                lexer.finish_outer_statement(cur_token);
             }
         }
         return return_states;
     }
-
 public:
-    void set_dry_run(bool mode) { dry_run = mode; } // <-- 新增：模式切換
+    void set_dry_run(bool mode) { dry_run = mode; } // <-- 關鍵：跳過賦值
     
     Parser(const string &input, int start_line = 1) 
         : lexer(input, start_line) {
@@ -2162,24 +2154,34 @@ public:
         lexer.skip_to_newline();
         if (!lexer.get_rest_str().empty()) {
             cur_token = lexer.get_next_token();
-            if (require_semicolon && cur_token.type == TokenType::Semicolon) {
-                require_semicolon = false;
-            }
         } else {
             cur_token = {TokenType::EndOfFile, ""};
         }
     }
-    // 只給報錯後在外部重置狀態時使用
+
     void reset_line() {
         lexer.reset_line();
-        cur_token.line = 1; // 程式會預讀下一行的token 如果前面已結束則須重置狀態
+        if (cur_token.type != TokenType::EndOfFile) {
+            cur_token.line = 1;
+        }
+    }
+
+    void recover_after_error() {
+        lexer.skip_to_newline();
+        lexer.reset_line();
+        require_semicolon = true;
+        if (!lexer.get_rest_str().empty()) {
+            cur_token = lexer.get_next_token();
+        } else {
+            cur_token = {TokenType::EndOfFile, ""};
+        }
     }
 
     void parse_cmd() {
-        if (!dry_run) cout << "> "; // 隱藏 prompt
+        if (!dry_run) cout << "> "; // 印出 prompt
         auto return_state = parse_statement();
         for (auto &state : return_state.states) {
-            if (!dry_run) { // 隱藏執行訊息
+            if (!dry_run) { // 印出解析紀錄
                 if (state.second == State::Definition) {
                     cout << "Definition of " << state.first << " entered ..." << endl;
                 } else if (state.second == State::NewDefinition) {
@@ -2207,7 +2209,6 @@ void ListAllVariables(const vector<Variable> &variables) {
     for (const auto &name : var_names) {
         cout << name << endl;
     }
-    // cout << "" << endl;
 }
 
 void ListAllFunctions(const vector<Variable> &functions) {
@@ -2217,22 +2218,13 @@ void ListAllFunctions(const vector<Variable> &functions) {
     }
     sort(func_names.begin(), func_names.end());
     for (const auto &name : func_names) {
-        cout << name << "( ";
-        for (int i = 0; i < func_table[name].params.size(); i++) {
-            cout << enum_to_DataType(func_table[name].params[i].type) << " "
-                 << func_table[name].params[i].name;
-            if (i < func_table[name].params.size() - 1) {
-                cout << ", ";
-            }
-        }
-        cout << " )" << endl;
+        cout << name + "()" << endl;
     }
-    // cout << "Statement executed ..." << endl;
 }
 
 void ListVariable(const vector<Variable> &variables) {
     string name = var_to_string(
-        format_params(func_table["ListVariable"].params, variables)["name"]);
+        format_params(builtin_func_table["ListVariable"].params, variables)["name"]);
     if (cur_env->get(name) != nullptr) {
         Variable var = *cur_env->get(name);
         if (holds_alternative<shared_ptr<ArrayType>>(var.val)) {
@@ -2241,7 +2233,6 @@ void ListVariable(const vector<Variable> &variables) {
         } else {
             cout << enum_to_DataType(var.type) << " " << name << " ;" << endl;
         }
-        // cout << "Statement executed ..." << endl;
     } else {
         cout << "Undefined variable : '" << name << "'" << endl;
     }
@@ -2249,7 +2240,7 @@ void ListVariable(const vector<Variable> &variables) {
 
 void ListFunction(const vector<Variable> &functions) {
     string name = var_to_string(
-        format_params(func_table["ListFunction"].params, functions)["name"]);
+        format_params(builtin_func_table["ListFunction"].params, functions)["name"]);
     if (func_table.find(name) != func_table.end()) {
         Function f = func_table.at(name);
         cout << enum_to_DataType(f.return_type) << " " << name << "( ";
@@ -2259,10 +2250,8 @@ void ListFunction(const vector<Variable> &functions) {
                 cout << ", ";
             }
         }
-        cout << " ) " << endl;
         Lexer lexer(f.content);
-        cout << lexer.pretty_print_block() << endl;
-        // cout << "Statement executed ..." << endl;
+        cout << " ) " << lexer.pretty_print_block() << endl;
     } else {
         cout << "Undefined function : '" << name << "'" << endl;
     }
@@ -2276,11 +2265,10 @@ void Done() {
 void parse_wrapper(Parser &parser) {
       while (!parser.is_eof()) {
         try {
-            parser.parse_cmd(); // 這裡會自動處理分號 每次處理一個 statement
+            parser.parse_cmd();
         } catch (const exception &e) {
             cout << e.what() << endl;
-            parser.reset_line(); // 重置當前statement的行數
-            parser.skip_to_newline();
+            parser.recover_after_error();
         }
     }
 }
@@ -2291,15 +2279,15 @@ int main() {
     cout << fixed << setprecision(3);
     cout << "Our-C running ..." << endl;
 
-    // ifstream file("test/data.txt"); // 本機測試
+    // ifstream file("test/data.txt"); // 檔案測試
     // stringstream ss;
-    // ss << file.rdbuf(); // 將整個檔案緩衝區讀入 stringstream
+    // ss << file.rdbuf(); // 將整個檔案內容寫入 stringstream
     // string content_ = ss.str();
     // auto start = content_.find_first_of("\n") + 1, end = content_.length();
     // string content = content_.substr(start, end - start + 1);
 
-	string content, _; // 上傳測試
-    cin >> _; // 去除題號
+	string content, _; // 跳過測試
+    cin >> _; // 忽略標題
     cin.ignore();
     char c;
     while (cin.get(c)) {
@@ -2307,7 +2295,7 @@ int main() {
     }
 	
     /*
-    // 新的讀取邏輯：讀到 Done() 停止，保留後續測資給 cin
+    // 持續讀取輸入，直到遇見 Done() 為止，用於直接將測資餵給 cin
     string line;
     while (getline(cin, line)) {
         content += line + "\n";

@@ -7,10 +7,10 @@ q5 2/3
 q6 2/3
 q7 3/4 WA
 q8 3/4 WA
-q9 2/4 WA
+q9 3/4 WA
 q10 2/4 WA
 
-q11 2/4 WA
+q11 3/4 WA
 q12 2/4 WA
-q13 2/4 WA
-q14 2/4 WA
+q13 2/4 RE
+q14 2/4 RE

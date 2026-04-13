@@ -121,3 +121,27 @@ UnsignedUnary_Expression            : Identifier [ '(' [ Parameters ] ')' | [ '[
 /* Example: i++ 或 arr[i]-- */
 /* Example: 100 */
 /* Example: (x * y) */
+
+// 額外性質
+
+Coercion (only when needed (隱式轉換)):
+string '+' -> int, float, string, bool, char
+bool -> string '+' 
+char -> string '+' 
+int -> int, float, string '+' 
+float -> int, float, string '+' 
+
+int (%, <<, >>) int (右側非0)
+
+%, <<, >>：兩側必須都是整數 。
+位移限制：位移運算子（<<, >>）的右側（位移量）必須是大於零的整數 。
+
+cout 不能被取值，也不能被賦值。cout << expr 本身也是一個表達式，其結果值就是 expr 的值 。
+
+自訂函數 設定宣告後變數值(不包含陣列但包含陣列中元素) 必定傳入可被隱式轉換及正確數量的值 
+自訂函數必定傳回可以被隱式轉換成正確型態的值
+
+內建函數傳入數量或形態不符的值時不執行 
+內建函數傳入正確數量及型態時必能成功執行(不會報錯)
+
+內建函數不可被複寫(不會報錯也不會成功)

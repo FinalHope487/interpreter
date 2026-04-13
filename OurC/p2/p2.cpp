@@ -1,4 +1,4 @@
-﻿#include <cctype>
+#include <cctype>
 #include <cmath>
 #include <cstddef>
 #include <cstdio>
@@ -14,9 +14,15 @@
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
+#include <variant>
 #include <vector>
 
 using namespace std;
+
+bool debug = false;
+void debug_msg(int n) {
+    if (debug) cout << "Debug : No." << n << endl;
+}
 
 // 1. 結構體宣告與繼承
 // 2. 推導指南 (Deduction Guide)
@@ -38,38 +44,32 @@ struct ReturnState;
 class Lexer;
 class Parser;
 
-bool is_float(double num);
 bool is_in(const string &op, const unordered_set<string> &targets);
 bool is_in(const string &op, const unordered_map<string, Function> &targets);
 bool is_in(const string &op, const unordered_map<string, Variable> &targets);
-string trim(const string &s);
-string num_to_string(double num);
-double string_to_num(string s);
 Variable convert_to_var(const Token tk);
-void print_var(const Variable &var);
-void print_ident_table(const unordered_map<string, Variable> &ident_table);
-void print_func_table(const unordered_map<string, Function> &func_table);
+string var_to_string(const Variable &var);
 unordered_map<string, Variable>
 format_params(const vector<FunctionParam> &params, const vector<Variable> &args);
 
 // 將這些函數加入map中
-void ListAllVariables(const vector<Variable> &variables); // variables sorted (from smallest to greatest)
-void ListAllFunctions(const vector<Variable> &functions); // functions sorted
+void ListAllVariables(); // variables sorted (from smallest to greatest)
+void ListAllFunctions(); // functions sorted
 void ListVariable(const vector<Variable> &variables); // the definition of a particular variable
 void ListFunction(const vector<Variable> &functions); // the definition of a particular function
 void Done(); // exit the interpreter
 
 enum TokenType {
-    Number,
-    Point, // 獨立的小數點 token "."
-    Ident,
-    Str,
-    Chr,
-    Boolean,
-    Operator,
-    SignOperator,
-    Assign,
-    Sign, // 可以連著很多sign
+    Number, // 數字和浮點數
+    Dot, // 獨立的小數點 token "."
+    Ident, // 識別字 包含變數 函數 資料型態 關鍵字等
+    Str, // 以""包起來的字串
+    Chr, // 以''包起來的字元
+    Boolean, // 布林值
+    Operator, // 運算子 * / % ^ & | && ||
+    SignOperator, // 符號運算子 + - 
+    Assign, // 賦值運算子
+    Sign, // 可以連著很多sign !
     LParen,
     RParen,
     LBracket,
@@ -80,8 +80,9 @@ enum TokenType {
     Decrement,
     IO,
     Comma,
+    Ref,
     Semicolon,
-    EndOfFile, // 考慮更精確的名稱
+    EndOfFile,
     Null,
     Undefined,
 };
@@ -92,6 +93,7 @@ enum DataType {
     Char,
     String,
     Bool,
+    Special,
     Void,
 };
 
@@ -146,6 +148,7 @@ string enum_to_TokenType(int type) {
     if (type == TokenType::Increment) return "Increment";
     if (type == TokenType::Decrement) return "Decrement";
     if (type == TokenType::IO) return "IO";
+    if (type == TokenType::Ref) return "Ref";
     if (type == TokenType::Semicolon) return "Semicolon";
     if (type == TokenType::EndOfFile) return "EOF";
     if (type == TokenType::Null) return "Null";
@@ -159,6 +162,7 @@ string enum_to_DataType(int type) {
     if (type == DataType::Char) return "char";
     if (type == DataType::String) return "string";
     if (type == DataType::Bool) return "bool";
+    if (type == DataType::Special) return "special";
     return "void";
 }
 
@@ -179,6 +183,10 @@ struct Token {
     int line = 1;
 };
 
+// 定義special型別存放cin cout
+struct SpecialType {
+    string val;
+};
 // 陣列：就是一堆 Variable 的集合
 // 自訂物件：本質上就是屬性名稱(string)與屬性值(Variable)的映射字典
 using ArrayType = vector<Variable>;
@@ -187,7 +195,7 @@ using ObjectType = unordered_map<string, Variable>;
 struct Variable {
     DataType type;
     // 直接儲存原生型別，並利用 shared_ptr 來管理大型或遞迴結構的記憶體
-    variant<monostate, int, double, bool, char, string, 
+    variant<monostate, int, double, bool, char, string, SpecialType,
             shared_ptr<ArrayType>, shared_ptr<ObjectType>> val;
     int size = -1; // size = -1 not array
 
@@ -203,14 +211,18 @@ struct Variable {
     Variable(shared_ptr<ObjectType> v) : val(v) { update_type(); }
 
     // 支援直接傳入 TokenType / string 值進行解析建構
-    // 初始化暫時設定為1
-    Variable(DataType t, const string &v) : type(t) {
-        if (t == DataType::Int) val = stoi(v.empty() ? "1" : v);
-        else if (t == DataType::Float) val = stod(v.empty() ? "1.0" : v);
-        else if (t == DataType::Bool) val = (v == "true");
-        else if (t == DataType::Char) val = v.empty() ? '\0' : v[0];
-        else if (t == DataType::String) val = v;
-        else val = monostate{};
+    Variable(DataType t, int size = -1, const string &v = "") : type(t), size(size) {
+        if (size > -1) {
+            val = make_shared<ArrayType>(size, zeroed(t));
+        } else {
+            if (t == DataType::Int) val = stoi(v.empty() ? "0" : v);
+            else if (t == DataType::Float) val = stod(v.empty() ? "0.0" : v);
+            else if (t == DataType::Bool) val = (v == "true");
+            else if (t == DataType::Char) val = v.empty() ? '\0' : v[0];
+            else if (t == DataType::String) val = v;
+            else if (t == DataType::Special) val = SpecialType{v};
+            else val = monostate{};
+        }
         update_type();
     }
 
@@ -220,7 +232,27 @@ struct Variable {
         else if (holds_alternative<bool>(val)) type = DataType::Bool;
         else if (holds_alternative<char>(val)) type = DataType::Char;
         else if (holds_alternative<string>(val)) type = DataType::String;
+        else if (holds_alternative<SpecialType>(val)) type = DataType::Special;
+        else if (holds_alternative<shared_ptr<ArrayType>>(val)) { /* keep original base type */ }
+        else if (holds_alternative<shared_ptr<ObjectType>>(val)) { /* keep original type */ }
         else type = DataType::Void;
+    }
+    static DataType promote(DataType t1, DataType t2) {
+        if (t1 == DataType::String || t2 == DataType::String) return DataType::String;
+        if (t1 == DataType::Float || t2 == DataType::Float) return DataType::Float;
+        if (t1 == DataType::Int || t2 == DataType::Int) return DataType::Int;
+        if (t1 == DataType::Char || t2 == DataType::Char) return DataType::Char;
+        if (t1 == DataType::Bool || t2 == DataType::Bool) return DataType::Bool;
+        return DataType::Void;
+    }
+
+    static Variable zeroed(DataType t) {
+        if (t == DataType::Int) return Variable(0);
+        if (t == DataType::Float) return Variable(0.0);
+        if (t == DataType::Char) return Variable('\0');
+        if (t == DataType::String) return Variable(string(""));
+        if (t == DataType::Bool) return Variable(false);
+        return Variable();
     }
 
 private:
@@ -251,7 +283,8 @@ private:
                 [](bool b) -> double { return b ? 1.0 : 0.0; },
                 [](char c) -> double { return static_cast<double>(c); },
                 [](const auto &) -> double {
-                    throw runtime_error("Error in operator bool: unsupported type conversion to double");
+                    /* throw runtime_error("Error in operator bool: unsupported type conversion to double"); */
+                    return 0.0;
                 }
             }, v.val);
         };
@@ -262,11 +295,14 @@ private:
 
         if (op == "==") result = (abs(n1 - n2) <= ErrorValue);
         else if (op == "!=") result = (abs(n1 - n2) > ErrorValue);
-        else if (op == "<") result = (n1 + ErrorValue < n2);
-        else if (op == ">") result = (n1 > n2 + ErrorValue);
-        else if (op == "<=") result = (n1 + ErrorValue <= n2);
-        else if (op == ">=") result = (n1 >= n2 + ErrorValue);
-        else throw runtime_error("Unsupported operator: " + op);
+        else if (op == "<") result = (n1 < n2 + ErrorValue);
+        else if (op == ">") result = (n1 > n2 - ErrorValue);
+        else if (op == "<=") result = (n1 <= n2 + ErrorValue);
+        else if (op == ">=") result = (n1 >= n2 - ErrorValue);
+        else {
+            /* throw runtime_error("Unsupported operator: " + op); */
+            return Variable();
+        }
 
         // 3. 直接利用建構子，回傳一個封裝了「原生 bool」的 Variable！
         return Variable(result);
@@ -281,7 +317,8 @@ public:
             [](char c) -> bool { return c != '\0'; },
             [](const string &s) -> bool { return !s.empty(); },
             [](const auto &) -> bool {
-                throw runtime_error("Unsupported type for bool conversion");
+                /* throw runtime_error("Unsupported type for bool conversion"); */
+                return false;
             }},
 			this->val);
     }
@@ -290,18 +327,20 @@ public:
         return visit(overloaded{
             [](int i) -> Variable { return Variable(i); },
             [](double d) -> Variable { return Variable(d); },
-            [](const auto &) -> Variable {
-                throw runtime_error("Error in operator unary +");
+            [&](const auto &) -> Variable {
+                /* throw runtime_error("Error in operator unary +"); */
+                return zeroed(this->type);
             }},
-            this->val);
+        	this->val);
     }
 
     Variable operator-() {
         return visit(overloaded{
             [](int i) -> Variable { return Variable(-i); },
             [](double d) -> Variable { return Variable(-d); },
-            [](const auto &) -> Variable {
-                throw runtime_error("Error in operator unary -");
+            [&](const auto &) -> Variable {
+                /* throw runtime_error("Error in operator unary -"); */
+                return zeroed(this->type);
             }},
             this->val);
     }
@@ -310,12 +349,20 @@ public:
         return visit(overloaded{
             [](bool b) -> Variable { return Variable(!b); },
             [](const auto &) -> Variable {
-                throw runtime_error("Error in operator unary !");
+                /* throw runtime_error("Error in operator unary !"); */
+                return Variable(false);
             }},
         	this->val);
     }
 
     Variable operator+(const Variable &var2) {
+        // Coercion: if either side is string (and not an array), result is string concatenation
+        if ((this->type == DataType::String || var2.type == DataType::String) &&
+            !holds_alternative<shared_ptr<ArrayType>>(this->val) &&
+            !holds_alternative<shared_ptr<ArrayType>>(var2.val)) {
+            return Variable(var_to_string(*this) + var_to_string(var2));
+        }
+
         return visit(overloaded{
             [](int a, int b) -> Variable { return Variable(a + b); },
             [](double a, double b) -> Variable { return Variable(a + b); },
@@ -324,7 +371,6 @@ public:
             [](const string &a, const string &b) -> Variable { return Variable(a + b); },
             [](const string &a, char b) -> Variable { return Variable(a + string(1, b)); },
             [](char a, const string &b) -> Variable { return Variable(string(1, a) + b); },
-            [](char a, char b) -> Variable { return Variable(string(1, a) + string(1, b)); },
             [](const shared_ptr<ArrayType> &a, const string &b) -> Variable {
                 string s = "";
                 for (const auto &v : *a) {
@@ -341,8 +387,9 @@ public:
                 }
                 return Variable(a + s);
             },
-            [](const auto &, const auto &) -> Variable {
-                throw runtime_error("Error in operator+");
+            [&](const auto &, const auto &) -> Variable {
+                /* throw runtime_error("Error in operator+"); */
+                return zeroed(promote(this->type, var2.type));
             }},
         this->val, var2.val);
     }
@@ -353,8 +400,9 @@ public:
             [](double a, double b) -> Variable { return Variable(a - b); },
             [](int a, double b) -> Variable { return Variable(a - b); },
             [](double a, int b) -> Variable { return Variable(a - b); },
-            [](const auto &, const auto &) -> Variable {
-                throw runtime_error("Error in operator-");
+            [&](const auto &, const auto &) -> Variable {
+                /* throw runtime_error("Error in operator-"); */
+                return zeroed(promote(this->type, var2.type));
             }},
         this->val, var2.val);
     }
@@ -365,8 +413,9 @@ public:
             [](double a, double b) -> Variable { return Variable(a * b); },
             [](int a, double b) -> Variable { return Variable(a * b); },
             [](double a, int b) -> Variable { return Variable(a * b); },
-            [](const auto &, const auto &) -> Variable {
-                throw runtime_error("Error in operator*");
+            [&](const auto &, const auto &) -> Variable {
+                /* throw runtime_error("Error in operator*"); */
+                return zeroed(promote(this->type, var2.type));
             }},
         this->val, var2.val);
     }
@@ -374,29 +423,38 @@ public:
     Variable operator/(const Variable &var2) {
         return visit(overloaded{
             [](int a, int b) -> Variable {
-                if (b == 0)
-                    throw runtime_error("Error in operator/: division by zero");
+                if (b == 0) {
+                    /* throw runtime_error("Error in operator/: division by zero"); */
+                    return Variable(0);
+                }
                 if (a % b == 0)
                     return Variable(a / b);
                 return Variable(static_cast<double>(a) / b);
             },
             [](double a, double b) -> Variable {
-                if (b == 0.0)
-                    throw runtime_error("Error in operator/: division by zero");
+                if (b == 0.0) {
+                    /* throw runtime_error("Error in operator/: division by zero"); */
+                    return Variable(0.0);
+                }
                 return Variable(a / b);
             },
             [](int a, double b) -> Variable {
-                if (b == 0.0)
-                    throw runtime_error("Error in operator/: division by zero");
+                if (b == 0.0) {
+                    /* throw runtime_error("Error in operator/: division by zero"); */
+                    return Variable(0.0);
+                }
                 return Variable(a / b);
             },
             [](double a, int b) -> Variable {
-                if (b == 0)
-                    throw runtime_error("Error in operator/: division by zero");
+                if (b == 0) {
+                    /* throw runtime_error("Error in operator/: division by zero"); */
+                    return Variable(0.0);
+                }
                 return Variable(a / b);
             },
-            [](const auto &, const auto &) -> Variable {
-                throw runtime_error("Error in operator/");
+            [&](const auto &, const auto &) -> Variable {
+                /* throw runtime_error("Error in operator/"); */
+                return zeroed(promote(this->type, var2.type));
             }},
         this->val, var2.val);
     }
@@ -404,22 +462,23 @@ public:
     Variable operator%(const Variable &var2) {
         return visit(overloaded{
             [](int a, int b) -> Variable {
-                if (b == 0)
-                    throw runtime_error("Error in operator%: division by zero");
+                if (b == 0) {
+                    /* throw runtime_error("Error in operator%: division by zero"); */
+                    return Variable(0);
+                }
                 return Variable(a % b);
             },
-            [](const auto &, const auto &) -> Variable {
-                throw runtime_error("Error in operator%: operands must be integers");
+            [&](const auto &, const auto &) -> Variable {
+                /* throw runtime_error("Error in operator%: operands must be integers"); */
+                return zeroed(promote(this->type, var2.type));
             }},
         this->val, var2.val);
     }
 
     Variable operator==(const Variable &var2) {
         if (!is_comparable(*this, var2)) {
-            throw runtime_error(
-                "Error in operator==: incomparable variable: " +
-                enum_to_DataType(this->type) + ", " + enum_to_DataType(var2.type)
-            );
+            /* throw runtime_error(...) */
+            return Variable(false);
         }
         return visit(overloaded{
             [](const string &a, const string &b) -> Variable {
@@ -433,7 +492,8 @@ public:
 
     Variable operator!=(const Variable &var2) {
         if (!is_comparable(*this, var2)) {
-            throw runtime_error("Error in operator!=: incomparable variable");
+            /* throw runtime_error("Error in operator!=: incomparable variable"); */
+            return Variable(true); // Technically != if incomparable? But return Variable() is safer. 
         }
         return visit(overloaded{
             [](const string &a, const string &b) -> Variable {
@@ -447,7 +507,8 @@ public:
 
     Variable operator>=(const Variable &var2) {
         if (!is_comparable(*this, var2)) {
-            throw runtime_error("Error in operator>=: incomparable variable");
+            /* throw runtime_error("Error in operator>=: incomparable variable"); */
+            return Variable(false);
         }
         return visit(overloaded{
             [](const string &a, const string &b) -> Variable {
@@ -461,7 +522,8 @@ public:
 
     Variable operator<=(const Variable &var2) {
         if (!is_comparable(*this, var2)) {
-            throw runtime_error("Error in operator<=: incomparable variable");
+            /* throw runtime_error("Error in operator<=: incomparable variable"); */
+            return Variable(false);
         }
         return visit(overloaded{
             [](const string &a, const string &b) -> Variable {
@@ -475,7 +537,8 @@ public:
 
     Variable operator>(const Variable &var2) {
         if (!is_comparable(*this, var2)) {
-            throw runtime_error("Error in operator>: incomparable variable");
+            /* throw runtime_error("Error in operator>: incomparable variable"); */
+            return Variable(false);
         }
         return visit(overloaded{
             [](const string &a, const string &b) -> Variable {
@@ -489,7 +552,8 @@ public:
 
     Variable operator<(const Variable &var2) {
         if (!is_comparable(*this, var2)) {
-            throw runtime_error("Error in operator<: incomparable variable");
+            /* throw runtime_error("Error in operator<: incomparable variable"); */
+            return Variable(false);
         }
         return visit(overloaded{
             [](const string &a, const string &b) -> Variable {
@@ -497,6 +561,38 @@ public:
             },
             [&](const auto &, const auto &) -> Variable {
                 return bool_evaluate(*this, "<", var2);
+            }},
+        this->val, var2.val);
+    }
+
+    Variable operator<<(const Variable &var2) {
+        return visit(overloaded{
+            [](int a, int b) -> Variable {
+                if (b <= 0) {
+                    /* throw runtime_error("Error in operator<<: shift amount must be greater than zero"); */
+                    return Variable(0);
+                }
+                return Variable(a << b);
+            },
+            [&](const auto &, const auto &) -> Variable {
+                /* throw runtime_error("Error in operator<<: operands must be integers"); */
+                return zeroed(promote(this->type, var2.type));
+            }},
+        this->val, var2.val);
+    }
+
+    Variable operator>>(const Variable &var2) {
+        return visit(overloaded{
+            [](int a, int b) -> Variable {
+                if (b <= 0) {
+                    /* throw runtime_error("Error in operator>>: shift amount must be greater than zero"); */
+                    return Variable(0);
+                }
+                return Variable(a >> b);
+            },
+            [&](const auto &, const auto &) -> Variable {
+                /* throw runtime_error("Error in operator>>: operands must be integers"); */
+                return zeroed(promote(this->type, var2.type));
             }},
         this->val, var2.val);
     }
@@ -509,6 +605,63 @@ public:
         return Variable(bool(*this) || bool(var2));
     }
 
+    Variable operator&(const Variable &var2) {
+        // int char bool
+        return visit(overloaded{
+            [](const int &a, const int &b) -> Variable { return Variable(a & b); },
+            [](const int &a, const char &b) -> Variable { return Variable(a & b); },
+            [](const int &a, const bool &b) -> Variable { return Variable(a & b); },
+            [](const char &a, const int &b) -> Variable { return Variable(a & b); },
+            [](const char &a, const char &b) -> Variable { return Variable(a & b); },
+            [](const char &a, const bool &b) -> Variable { return Variable(a & b); },
+            [](const bool &a, const int &b) -> Variable { return Variable(a & b); },
+            [](const bool &a, const char &b) -> Variable { return Variable(a & b); },
+            [](const bool &a, const bool &b) -> Variable { return Variable(a & b); },
+            [&](const auto &, const auto &) -> Variable {
+                /* throw runtime_error("Error in operator&: invalid data type ..."); */
+                return zeroed(promote(this->type, var2.type));
+            }},
+        this->val, var2.val);
+    }
+
+    Variable operator^(const Variable &var2) {
+        // int char bool
+        return visit(overloaded{
+            [](const int &a, const int &b) -> Variable { return Variable(a ^ b); },
+            [](const int &a, const char &b) -> Variable { return Variable(a ^ b); },
+            [](const int &a, const bool &b) -> Variable { return Variable(a ^ b); },
+            [](const char &a, const int &b) -> Variable { return Variable(a ^ b); },
+            [](const char &a, const char &b) -> Variable { return Variable(a ^ b); },
+            [](const char &a, const bool &b) -> Variable { return Variable(a ^ b); },
+            [](const bool &a, const int &b) -> Variable { return Variable(a ^ b); },
+            [](const bool &a, const char &b) -> Variable { return Variable(a ^ b); },
+            [](const bool &a, const bool &b) -> Variable { return Variable(a ^ b); },
+            [&](const auto &, const auto &) -> Variable {
+                /* throw runtime_error("Error in operator^: invalid data type ..."); */
+                return zeroed(promote(this->type, var2.type));
+            }},
+        this->val, var2.val);
+    }
+
+    Variable operator|(const Variable &var2) {
+        // int char bool
+        return visit(overloaded{
+            [](const int &a, const int &b) -> Variable { return Variable(a | b); },
+            [](const int &a, const char &b) -> Variable { return Variable(a | b); },
+            [](const int &a, const bool &b) -> Variable { return Variable(a | b); },
+            [](const char &a, const int &b) -> Variable { return Variable(a | b); },
+            [](const char &a, const char &b) -> Variable { return Variable(a | b); },
+            [](const char &a, const bool &b) -> Variable { return Variable(a | b); },
+            [](const bool &a, const int &b) -> Variable { return Variable(a | b); },
+            [](const bool &a, const char &b) -> Variable { return Variable(a | b); },
+            [](const bool &a, const bool &b) -> Variable { return Variable(a | b); },
+            [&](const auto &, const auto &) -> Variable {
+                /* throw runtime_error("Error in operator|: invalid data type ..."); */
+                return zeroed(promote(this->type, var2.type));
+            }},
+        this->val, var2.val);
+    }
+
     Variable operator+=(const Variable &var2) { return *this = *this + var2; }
     Variable operator-=(const Variable &var2) { return *this = *this - var2; }
     Variable operator*=(const Variable &var2) { return *this = *this * var2; }
@@ -519,6 +672,8 @@ public:
 struct FunctionParam {
     DataType type;
     string name;
+    int size = -1;
+    bool is_ref = false;
 };
 
 struct Function {
@@ -533,6 +688,11 @@ struct Environment {
 
     // 建構子，方便直接指定外層環境
     Environment(shared_ptr<Environment> p = nullptr) : parent(p) {}
+
+    void global_init() {
+        declare("cin", Variable{DataType::Special, -1, "cin"});
+        declare("cout", Variable{DataType::Special, -1, "cout"});
+    }
 
     // 尋找變數 (Lookup) - 由內而外找
     // 回傳指標，這樣才能夠直接修改它的值
@@ -598,17 +758,13 @@ const unordered_set<string> data_types = {
 
 const unordered_set<string> keywords = ([]{
     unordered_set<string> combined = {
-        "cin",
-        "cout",
-        "ListAllVariables",
-        "ListAllFunctions",
-        "ListVariable",
-        "ListFunction",
-        "Done",
+        "true",
+        "false",
         "if",
         "else",
+        "do",
         "while",
-        "for",
+        // "for",
         "return",
         "break",
         "continue"
@@ -620,7 +776,7 @@ const unordered_set<string> keywords = ([]{
 // unexpected next token types
 unordered_map<TokenType, vector<TokenType>> unexpected_types = {
     {TokenType::Number, {Sign, Assign, Ident, LParen}},
-    {TokenType::Point, {Sign, Assign, Ident, LParen}},
+    {TokenType::Dot, {Sign, Assign, Ident, LParen, Dot}},
     {TokenType::Ident, {Sign}},
     {TokenType::Str, {Sign, Assign, Increment, Decrement, LParen}},
     {TokenType::Chr, {Sign, Assign, LParen}},
@@ -637,6 +793,8 @@ unordered_map<TokenType, vector<TokenType>> unexpected_types = {
     {TokenType::RBracket, {Sign}},
     {TokenType::LBrace, {Operator, Assign}},
     {TokenType::RBrace, {Sign, Assign, Increment, Decrement}},
+    {TokenType::Comma, {Operator, Assign}},
+    {TokenType::Ref, {Operator, Assign, Increment, Decrement}},
     {TokenType::Semicolon, {}},
     {TokenType::EndOfFile, {}},
     {TokenType::Null, {}},
@@ -644,37 +802,7 @@ unordered_map<TokenType, vector<TokenType>> unexpected_types = {
 };
 
 // ========================================Function Definition========================================
-
 // const string& 傳引用(保護正本) const string 傳值(會複製一份副本且保護副本)
-string trim(const string &s) {
-    size_t start = s.find_first_not_of(WHITESPACE);
-    if (start == string::npos) return "";
-    size_t end = s.find_last_not_of(WHITESPACE);
-    return s.substr(start, end - start + 1); // 起點、長度
-}
-
-string num_to_string(double num) {
-    stringstream ss;
-    ss << setprecision(15) << num;
-    return ss.str();
-}
-
-double string_to_num(string s) {
-    try {
-        return stod(s);
-    } catch (const invalid_argument &ia) {
-        throw runtime_error("Error in string_to_num with value: " + s);
-    } catch (const out_of_range &oor) {
-        throw runtime_error("Error in string_to_num with value: " + s);
-    }
-}
-
-bool is_float(double num) {
-    // 可能有點問題
-    // cout << num << " " << floor(num) << endl;
-    return (abs(num - floor(num)) > ErrorValue);
-}
-
 bool is_in(const string &str, const unordered_set<string> &targets) {
     return targets.find(str) != targets.end();
 }
@@ -687,22 +815,22 @@ bool is_in(const string &str, const unordered_map<string, Variable> &targets) {
     return targets.find(str) != targets.end();
 }
 
-Variable convert_to_var(const Token tk) {
+Variable convert_to_var(const Token tk, int size = -1) {
+    // 根據 Variable 的設計 (假設 Variable 有 type: DataType 和 val: variant)
     if (tk.type == TokenType::Number) {
-        for (int i = 0; i < tk.val.length(); i++) {
-            if (tk.val[i] == '.') {
-                return {DataType::Float, tk.val};
-            }
+        if (tk.val.find('.') != string::npos) {
+            // 浮點數
+            return Variable{DataType::Float, size, tk.val};
+        } else {
+            // 整數
+            return Variable{DataType::Int, size, tk.val};
         }
-        return {DataType::Int, tk.val};
-    } else if (tk.type == TokenType::Point) {
-        return {DataType::Float, "0" + tk.val};
     } else if (tk.type == TokenType::Str) {
-        return {DataType::String, tk.val};
+        return Variable{DataType::String, size, tk.val};
     } else if (tk.type == TokenType::Chr) {
-        return {DataType::Char, tk.val};
+        return Variable{DataType::Char, size, tk.val};
     } else if (tk.type == TokenType::Boolean) {
-        return {DataType::Bool, tk.val};
+        return Variable{DataType::Bool, size, tk.val};
     } else {
         throw runtime_error("Error in convert_to_var()");
     }
@@ -719,25 +847,10 @@ string var_to_string(const Variable &var) {
         [](bool b) { return string(b ? "true" : "false"); },
         [](char c) { return string(1, c); },
         [](const string &s) { return s; },
+        [](const SpecialType &s) { return s.val; },
         [](const monostate &) { return string("Null"); },
         [](const auto &) { return string("[Object/Array]"); }
     }, var.val);
-}
-
-void print_var(const Variable &var) { cout << var_to_string(var) << endl; }
-
-void print_ident_table(const unordered_map<string, Variable> &ident_table) {
-    cout << "Ident table: " << endl;
-    for (auto const &[key, val] : ident_table) {
-        cout << key << " : " << var_to_string(val) << endl;
-    }
-}
-
-void print_func_table(const unordered_map<string, Function> &func_table) {
-    cout << "Function table: " << endl;
-    for (auto const &[key, val] : func_table) {
-        cout << key << endl;
-    }
 }
 
 unordered_map<string, Variable> format_params(const vector<FunctionParam> &params,const vector<Variable> &args) {
@@ -771,6 +884,8 @@ private:
     size_t last_token_start_idx = 0;
     int cur_line = 1;
     int last_skipped_newline_count = 0;
+
+    Token cur_token;
 
     /* 目錄
     Token get_a_token(int skip_tokens = 1);
@@ -832,22 +947,27 @@ private:
                         chr_str += text[idx];
                         idx++;
                     } else {
+                        debug_msg(1);
                         throw runtime_error("Line " + to_string(cur_line) + " : unexpected token : '''");
                     }
                 } else {
                     chr_str += text[idx];
                     idx++;
                 }
-                if (text[idx] != '\'')
+                if (text[idx] != '\'') {
+                    debug_msg(2);
                     throw runtime_error("Line " + to_string(cur_line) + " : unexpected token : '''");
+                }
                 idx++;
                 tk = {TokenType::Chr, chr_str};
             } else if (text[idx] == '"') {
                 string str_str;
                 idx++;
                 while (text[idx] != '"') {
-                    if (idx >= text.length())
+                    if (idx >= text.length()) {
+                        debug_msg(3);
                         throw runtime_error("Line " + to_string(cur_line) + " : unexpected token : '\"'");
+                    }
                     if (text[idx] == '\\') {
                         str_str += '\\';
                         idx++;
@@ -860,15 +980,17 @@ private:
                         idx++;
                     }
                 }
-                if (text[idx] != '"')
+                if (text[idx] != '"') {
+                    debug_msg(4);
                     throw runtime_error("Line " + to_string(cur_line) + " : unexpected token : '\"'");
+                }
                 idx++;
                 tk = {TokenType::Str, str_str};
             } else if (isdigit(text[idx]) || text[idx] == '.') {
                 string num_str;
 
                 if (text[idx] == '.') {
-                    tk = {TokenType::Point, "."};
+                    tk = {TokenType::Dot, "."};
                     idx++;
                 } else if (isdigit(text[idx])) {
                     while (idx < text.length() && isdigit(text[idx])) {
@@ -928,6 +1050,10 @@ private:
                     else if (c == ',') {idx += 1; tk = {TokenType::Comma, ","}; continue;}
                     else if (c == '?') {idx += 1; tk = {TokenType::Operator, "?"}; continue;}
                     else if (c == ':') {idx += 1; tk = {TokenType::Operator, ":"}; continue;}
+                    else if (c == '%') {idx += 1; tk = {TokenType::Operator, "%"}; continue;}
+                    else if (c == '&') {idx += 1; tk = {TokenType::Operator, "&"}; continue;}
+                    else if (c == '|') {idx += 1; tk = {TokenType::Operator, "|"}; continue;}
+                    else if (c == '^') {idx += 1; tk = {TokenType::Operator, "^"}; continue;}
                     else if (c == ';') {idx += 1; tk = {TokenType::Semicolon, ";"}; continue;}
                     else {idx += 1; tk = {TokenType::Undefined, string("") + c}; continue;}
                 } else {
@@ -958,10 +1084,9 @@ public:
         return "";
     }
 
-    Token get_next_token(int skip_tokens = 1) {
-        // get token 同時修改idx
-        Token tk = get_a_token(skip_tokens);
-        // cout << "tk: " << tk.val << endl;
+    Token get_next_token() {
+        Token tk = get_a_token(1);
+        cur_token = tk;
         return tk;
     }
 
@@ -1008,8 +1133,7 @@ public:
     }
 
     string get_a_block() {
-        Token tk = get_next_token();
-        if (tk.val == "{") {
+        if (cur_token.val == "{") {
             int brace_count = 1;
             string block_str = "{";
             while (idx < text.length()) {
@@ -1026,12 +1150,14 @@ public:
             }
             return block_str;
         } else {
-            throw runtime_error("Line " + to_string(tk.line) + " : unexpected token : '" + tk.val + "'");
+            debug_msg(5);
+            throw runtime_error("Line " + to_string(cur_token.line) + " : unexpected token : '" + cur_token.val + "'");
         }
     }
     string pretty_print_block() {
         Token tk = peek_token();
         if (tk.val != "{") {
+            debug_msg(6);
             throw runtime_error("Line " + to_string(tk.line) + " : unexpected token : '" + tk.val + "'");
         }
     
@@ -1153,55 +1279,51 @@ private:
 
 /* 目錄 (重構版)
     struct ReturnException;
-    void next(int skip_tokens = 1, bool is_def = false)
+    void next()
 
     // ==========================================
     // 1. 運算式解析 (Expression Parsing) - 由下而上嚴格對應優先級
     // ==========================================
-    [修改] Variable parse_unary_exp()         // 原 parse_factor。需加入：負號、!、前/後置 ++/--，以及陣列 [ ] 取值。
-    [新增] Variable parse_multiplicative_exp()// 取代 parse_term。需加入：取餘數 '%'。
-    [新增] Variable parse_additive_exp()      // 取代原 parse_exp 中處理加減法的部分。
-    [新增] Variable parse_shift_exp()         // 新增：處理左移 '<<' 與右移 '>>'。
-    [新增] Variable parse_relational_exp()    // 取代 parse_relation_exp。專注處理 '<', '>', '<=', '>='。
-    [新增] Variable parse_equality_exp()      // 取代 parse_equal_exp。專注處理 '==', '!='。
-    [新增] Variable parse_bitwise_and_exp()   // 新增：處理位元 AND '&'。
-    [新增] Variable parse_bitwise_xor_exp()   // 新增：處理位元 XOR '^'。
-    [新增] Variable parse_bitwise_or_exp()    // 新增：處理位元 OR '|'。
-    [修改] Variable parse_logical_and_exp()   // 原 parse_and_exp。處理 '&&'。
-    [修改] Variable parse_logical_or_exp()    // 原 parse_or_exp。處理 '||'。
-    [修改] Variable parse_conditional_exp()   // 原 parse_bool_exp。專注處理三元運算子 '?' ':'。
-    [新增] Variable parse_basic_exp()         // 新增：文法表中的 BasicExpression。負責處理賦值 ('=', '+=', etc.) 及陣列元素賦值。
-    [新增] Variable parse_expression()        // 新增：文法表頂層。處理逗號運算子 ',' 串聯多個 BasicExpression。
+    Variable parse_unary_exp()         
+    Variable parse_multiplicative_exp()
+    Variable parse_additive_exp()      
+    Variable parse_shift_exp()         
+    Variable parse_relational_exp()    
+    Variable parse_equality_exp()      
+    Variable parse_bitwise_and_exp()   
+    Variable parse_bitwise_xor_exp()   
+    Variable parse_bitwise_or_exp()    
+    Variable parse_logical_and_exp()   
+    Variable parse_logical_or_exp()    
+    Variable parse_conditional_exp()   
+    Variable parse_basic_exp()         
+    Variable parse_expression()        
 
     // ==========================================
     // 2. 控制流與陳述句 (Control Flow & Statements)
     // ==========================================
-    [移除] Variable parse_io(const string &type) // 移除：嚴格文法不包含 cin / cout。
-    [修改] bool parse_condition()             // 修改：括號內需改為呼叫頂層的 parse_expression()。
+    void parse_io(const string &type) 
+    bool parse_condition()    
     void skip_token()
     void process_parens_in_skip()
-    [修改] void skip_statement()              // 修改：內部需加入對 do-while 結構的略過邏輯。
+    void skip_statement()
     void parse_if_else()
     void parse_while()
-    [新增] void parse_do_while()              // 新增：實作文法表中的 do-while 迴圈。
+    void parse_do_while()
     void parse_block()
 
     // ==========================================
     // 3. 函式與變數宣告 (Declarations)
     // ==========================================
     void parse_function_block(string block_str, unordered_map<string, Variable> formatted_params)
-    [修改] vector<StatePair> parse_variable_declaration(DataType type = DataType::Void) 
-           // 修改：確保符合文法「宣告時不允許初始化」的規則（也就是不能寫 int x = 5;）。
-    [修改] vector<FunctionParam> parse_function_declaration_params() 
-           // 修改：文法表 FormalParameters 支援參照（&）與陣列（[ ]），需加入對應解析。
+    vector<StatePair> parse_variable_declaration(DataType type = DataType::Void) 
+    vector<FunctionParam> parse_function_declaration_params() 
     vector<Variable> parse_function_params()
-    [修改] StatePair parse_function_declaration() 
-           // 修改：確保對應文法，可能需要相容 void 作為回傳型態或參數的特殊處理。
-    [修改] void parse_function_call()         
+    StatePair parse_function_declaration() 
+    [修改] ❌void parse_function_call()
            // 修改：呼叫時的引數傳遞，需相容陣列與參照型態的傳遞。
     void parse_return(DataType return_type)
-    [修改] ReturnState parse_statement(bool sub_statement = false) 
-           // 修改核心：移除此處所有對於「=」的判斷與賦值操作，將權力下放給 parse_basic_exp()。
+    ReturnState parse_statement(bool sub_statement = false) 
 
     // ==========================================
     // 4. 基礎 Parser 方法 (Base Methods)
@@ -1217,378 +1339,532 @@ private:
         Variable value;
     };
 
-    void next(int skip_tokens = 1, bool is_def = false) {
+    void next() {
         // 如果 "下一個" 不是預期的 token 就在這階段報錯（這算是屬於較淺層的報錯）
         auto ue_types = unexpected_types[cur_token.type];
-        Token next_token = lexer.peek_token(skip_tokens);
+        Token next_token = lexer.peek_token();
 
         // 第一階段報錯
         if (cur_token.type == TokenType::Undefined) {
-            throw runtime_error("Line " + to_string(cur_token.line) + " : unrecognized token with first char : '" + cur_token.val + "'");
+            throw runtime_error("Line " + to_string(cur_token.line) + " : unrecognized token with first char : '" + cur_token.val[0] + "'");
 
         // 後隨型態報錯
         } else if (find(ue_types.begin(), ue_types.end(), next_token.type) != ue_types.end()) {
+            debug_msg(7);
             throw runtime_error("Line " + to_string(next_token.line) + " : unexpected token : '" + next_token.val + "'");
-
-        // ident第一階段報錯
-        } else if (cur_token.type == TokenType::Ident && 
-            (cur_env->get(cur_token.val) == nullptr || is_def) && 
-            keywords.find(cur_token.val) == keywords.end() &&
-            func_table.find(cur_token.val) == func_table.end() &&         // 加入自定義函數檢查
-            builtin_func_table.find(cur_token.val) == builtin_func_table.end()) // 加入內建函數檢查
-        {
-            throw runtime_error("Line " + to_string(cur_token.line) + " : undefined identifier : '" + cur_token.val + "'");
         }
         prev_token = cur_token;
-        cur_token = lexer.get_next_token(skip_tokens);
-        // cout << "next: " << cur_token.val << " | line: " << cur_token.line << endl;
-        return;
+        cur_token = lexer.get_next_token();
     }
 
-    Variable parse_factor() {
-        // num, (), sign
-        Variable result;
-        Token next_token = lexer.peek_token();
-        if (cur_token.val == "(") {
+    Variable* parse_ident_lvalue() {
+        // cur_token 應為 ident
+        Token id_token = cur_token;
+        Variable* target_var = cur_env->get(id_token.val);
+        if (target_var == nullptr) {
+            throw runtime_error("Line " + to_string(id_token.line) + " : undefined identifier : '" + id_token.val + "'");
+        }
+        next();
+
+        // 處理陣列下標 [ ] (不支援多維陣列)
+        if (cur_token.val == "[") {
             next();
-            // (is_return_bool) ? val = parse_bool_exp() : val = parse_exp();
-            result = parse_bool_exp();
-            if (cur_token.val == ")") {
-                next();
-            } else {
+            Variable index_var = parse_expression();
+            if (cur_token.val != "]") {
+                debug_msg(8);
                 throw runtime_error("Line " + to_string(cur_token.line) + " : unexpected token : '" + cur_token.val + "'");
             }
+            next();
+            
+            if (auto arr_ptr = get_if<shared_ptr<ArrayType>>(&target_var->val)) {
+                int idx = 0;
+                if (auto i = get_if<int>(&index_var.val)) {
+                    idx = *i;
+                } else {
+                    // throw runtime_error("Line " + to_string(cur_token.line) + " : array index must be an integer");
+                }
+                
+                if (idx >= 0 && idx < (*arr_ptr)->size()) {
+                    target_var = &((**arr_ptr)[idx]); 
+                } else {
+                        /* throw runtime_error("Line " + to_string(id_token.line) + " : undefined identifier : '" + id_token.val + "'"); */
+                }
+            } else {
+                // throw runtime_error("Line " + to_string(id_token.line) + " : '" + id_token.val + "' is not an array");
+            }
+        }
+        return target_var;
+    }
 
-            // cout << "cur: " + cur_token.val + " | next: " + lexer.peek_token().val << endl;
-        } else if (is_in(cur_token.val, {"+", "-", "!"})) {
-            if (cur_token.val == "++" && next_token.type == TokenType::Ident) {
-                // ++a
+    Variable parse_ident_rvalue() {
+        // cur_token 應該是 ident
+        if (cur_token.type == TokenType::Ident) {
+            Token id_token = cur_token;
+            if (lexer.peek_token().val == "(") {
+                return parse_function_call();
+            } else {
+                Variable* target_var = cur_env->get(id_token.val);
+                if (target_var == nullptr) {
+                    throw runtime_error("Line " + to_string(id_token.line) + " : undefined identifier : '" + id_token.val + "'");
+                }
+                next(); // 消耗 ident
+
+                Variable result = *target_var;
+                if (cur_token.val == "[") {
+                    next();
+                    Variable index_var = parse_expression();
+                    if (cur_token.val != "]") {
+                        debug_msg(9);
+                        throw runtime_error("Line " + to_string(cur_token.line) + " : unexpected token : '" + cur_token.val + "'");
+                    }
+                    next();
+                    
+                    if (auto arr_ptr = get_if<shared_ptr<ArrayType>>(&result.val)) {
+                        int idx = 0;
+                        if (auto i = get_if<int>(&index_var.val)) {
+                            idx = *i;
+                        } else if (auto d = get_if<double>(&index_var.val)) {
+                            idx = static_cast<int>(*d);
+                        } else {
+                            // throw runtime_error("Line " + to_string(cur_token.line) + " : array index must be an integer");
+                        }
+                        
+                        if (idx >= 0 && idx < (*arr_ptr)->size()) {
+                            result = (**arr_ptr)[idx];
+                        } else {
+                            // throw runtime_error("Line " + to_string(id_token.line) + " : array index out of bounds");
+                        }
+                    } else {
+                        // throw runtime_error("Line " + to_string(id_token.line) + " : '" + id_token.val + "' is not an array");
+                    }
+                }
+                return result;
+            }
+        }
+        debug_msg(10);
+        throw runtime_error("Line " + to_string(cur_token.line) + " : unexpected token : '" + cur_token.val + "'");
+    }
+
+    Variable parse_unary_exp(bool is_signed = false) {
+        // num, ident, function call, (), sign, ++, --
+        Variable result;
+        Token next_token = lexer.peek_token();
+        // is_signed 為true時前後不可接++ --
+        if (cur_token.val == "(") {
+            // if (debug) cout << "Debug unary exp: " << cur_token.val << " " << next_token.val << endl;
+            next();
+            result = parse_expression();
+            // expression 的值為最後一個basic expression的值
+            if (cur_token.val == ")") {
                 next();
-                Token id_token = cur_token;
-                result = parse_factor() + Variable{1};
-                if (!dry_run) cur_env->set(id_token.val, result);
-            } else if (cur_token.val == "--" && next_token.type == TokenType::Ident) {
-                // --a
-                next();
-                Token id_token = cur_token;
-                result = parse_factor() - Variable{1};
-                if (!dry_run) cur_env->set(id_token.val, result);
-            } else if (cur_token.val == "+") {
-                next();
-                if (cur_token.type == TokenType::Ident) {
+                return result;
+            } else {
+                debug_msg(11);
+                if (symbols.find(cur_token.val) == symbols.end()) {
+                    throw runtime_error("Line " + to_string(cur_token.line) + " : unrecognized token with first char : '" + cur_token.val[0] + "'");
+                } else {
                     throw runtime_error("Line " + to_string(cur_token.line) + " : unexpected token : '" + cur_token.val + "'");
                 }
-                result = parse_factor();
+            }
+        }
+        // sign TODO: 這裡有問題 考慮移除result都改為 return
+        if (is_in(cur_token.val, {"+", "-", "!", "++", "--"})) {
+            if (cur_token.val == "+") {
+                next();
+                return parse_unary_exp(true);
             } else if (cur_token.val == "-") {
                 next();
-                if (cur_token.type == TokenType::Ident) {
-                    throw runtime_error("Line " + to_string(cur_token.line) + " : unexpected token : '" + cur_token.val + "'");
-                }
-                result = -parse_factor();
+                return -parse_unary_exp(true);
             } else if (cur_token.val == "!") {
                 next();
-                if (cur_token.type == TokenType::Ident) {
-                    throw runtime_error("Line " + to_string(cur_token.line) + " : unexpected token : '" + cur_token.val + "'");
-                }
-                result = !parse_factor();
+                return !parse_unary_exp(true);
+            // ++a
+            } else if (!is_signed && cur_token.val == "++") {
+                next();
+                result = parse_unary_exp() + Variable{1};
+                if (!dry_run) cur_env->set(cur_token.val, result);
+                is_signed = true;
+            // --a
+            } else if (!is_signed && cur_token.val == "--") {
+                next();
+                result = parse_unary_exp() - Variable{1};
+                if (!dry_run) cur_env->set(cur_token.val, result);
+                is_signed = true;
             }
-        } else if (cur_token.type == TokenType::Number) {
+        }
+        // num 1, 1., .1, 1.0
+        if (cur_token.type == TokenType::Number) {
             auto num_tk = cur_token;
-            if (lexer.peek_token().type == TokenType::Point) {
-                next(); // get Point (".")
+            if (lexer.peek_token().type == TokenType::Dot) {
+                next(); // get "."
                 num_tk.val += cur_token.val;
                 if (lexer.peek_token().type == TokenType::Number) {
                     next(); // get digits after dot
                     num_tk.val += cur_token.val;
                 }
-
-                if (lexer.peek_token().type == TokenType::Point) {
-                    throw runtime_error("Line " + to_string(cur_token.line) + " : unexpected token : '" + lexer.peek_token().val + "'");
-                }
             }
-            result = convert_to_var(num_tk);
+            result = convert_to_var(num_tk, -1);
             next();
-            
-        } else if (cur_token.type == TokenType::Point) {
+        } else if (cur_token.type == TokenType::Dot) {
             auto num_tk = cur_token; // "."
             Token next_token = lexer.peek_token();
             if (next_token.type == TokenType::Number) {
                 next(); // get digits after dot
                 num_tk.val += cur_token.val;
-            } else if (next_token.type == TokenType::Point) {
-                throw runtime_error("Line " + to_string(next_token.line) + " : unexpected token : '" + next_token.val + "'");
+            }
+            result = convert_to_var(num_tk, -1);
+            next();
+        // ident or function call
+        } else if (cur_token.type == TokenType::Ident) {
+            Token next_token = lexer.peek_token();
+            bool is_assign = is_in(next_token.val, {"=", "+=", "-=", "*=", "/=", "%="});
+            if (!is_assign && next_token.val == "[") {
+                int i = 2;
+                int b_count = 1;
+                while (b_count > 0) {
+                    Token t = lexer.peek_token(i++);
+                    if (t.type == TokenType::EndOfFile || t.type == TokenType::Semicolon) break;
+                    if (t.val == "[") b_count++;
+                    else if (t.val == "]") b_count--;
+                }
+                if (b_count == 0) {
+                    Token t_after = lexer.peek_token(i);
+                    if (is_in(t_after.val, {"=", "+=", "-=", "*=", "/=", "%="})) is_assign = true;
+                }
             }
 
-            result = convert_to_var(num_tk);
-            next();
-
-        } else if (cur_token.type == TokenType::Ident) {
-            if (lexer.peek_token().val == "(") {
-                result = parse_function_call();
-            } else {
-                Token id_token = cur_token;
-                next(); // 略過標識符
-                // 拿值
-                // 需要錯誤導向
-                result = *cur_env->get(id_token.val);
-                // cout << "result: " << id_token.val << " | " << result.val << endl;
+            if (is_assign) {
+                // 如果是賦值，應該在 parse_basic_exp 處理，這裡直接返回不進入 R-value 解析
+                // 但實際上 parse_basic_exp 會先判斷，所以這裡理應是不滿足 is_assign 的情況
+                // 為了保險，我們加上這個判斷
+                return result; 
+            }
+            if (cur_token.val == "cin" || cur_token.val == "cout") {
+                Token io_token = cur_token;
+                next();
+                return Variable{DataType::Special, -1, io_token.val};
+            }
+            Token id_token = cur_token;
+            next_token = lexer.peek_token();
+            // function call
+            bool is_func_call = false;
+            if (next_token.val == "(") is_func_call = true;
+            // 若為關鍵字意味著必然不是變數等 應跳至parse statement被捕捉
+            if (!is_in(cur_token.val, keywords)) result = parse_ident_rvalue();
+            if (!is_func_call) {
+                // TODO: 支援修改陣列中元素 需修改邏輯
                 if (cur_token.val == "++") {
+                    if (is_signed) {
+                        debug_msg(15);
+                        throw runtime_error("Line " + to_string(cur_token.line) + " : unexpected token : '" + cur_token.val + "'");
+                    }
                     if (!dry_run) {
                         cur_env->set(
                             id_token.val,
-                            *cur_env->get(id_token.val) + Variable{result.type, "1"}
+                            *cur_env->get(id_token.val) + Variable{result.type, -1, "1"}
                         );
                     }
                     next();
                 } else if (cur_token.val == "--") {
+                    if (is_signed) {
+                        debug_msg(16);
+                        throw runtime_error("Line " + to_string(cur_token.line) + " : unexpected token : '" + cur_token.val + "'");
+                    }
                     if (!dry_run) {
                         cur_env->set(
                             id_token.val,
-                            *cur_env->get(id_token.val) - Variable{result.type, "1"}
+                            *cur_env->get(id_token.val) - Variable{result.type, -1, "1"}
                         );
                     }
                     next();
                 }
             }
-
         } else if (cur_token.type == TokenType::Chr) {
-            result = Variable{DataType::Char, cur_token.val};
+            result = Variable{DataType::Char, -1, cur_token.val};
             next();
 
         } else if (cur_token.type == TokenType::Str) {
-            result = Variable{DataType::String, cur_token.val};
+            result = Variable{DataType::String, -1, cur_token.val};
             next();
-
+        } else if (cur_token.type == TokenType::Boolean) {
+            result = Variable{DataType::Bool, -1, cur_token.val};
+            next();
         } else if (cur_token.type == TokenType::Semicolon) {
-            return Variable{DataType::Void, ""};
+            return Variable{DataType::Void};
 
-        } else {
+        } else if (cur_token.val != "+" && cur_token.val != "-") {
             if (symbols.find(cur_token.val) == symbols.end()) {
-                throw runtime_error("Line " + to_string(cur_token.line) + " : unrecognized token with first char : '" + cur_token.val + "'");
+                throw runtime_error("Line " + to_string(cur_token.line) + " : unrecognized token with first char : '" + cur_token.val[0] + "'");
             } else {
+                debug_msg(17);
                 throw runtime_error("Line " + to_string(cur_token.line) + " : unexpected token : '" + cur_token.val + "'");
             }
         }
         return result;
-      }
+    }
 
-    Variable parse_term() {
+    Variable parse_multiplicative_exp() {
         // *, /
-        Variable result = parse_factor();
-        // if (cur_token.type == TokenType::EndOfFile) return val;
-
-        while (is_in(cur_token.val, unordered_set<string>{"*", "/"})) {
+        Variable result = parse_unary_exp();
+        while (is_in(cur_token.val, unordered_set<string>{"*", "/", "%"})) {
             if (cur_token.val == "*") {
                 next();
-                result = result * parse_factor();
+                result = result * parse_unary_exp();
             }
             if (cur_token.val == "/") {
                 next();
-                auto a = parse_factor();
-                // cout << result.val << " / " << a.val << endl;
-                result = result / a;
-                // if (stod(a.val) != 0) val = val / a;
-                // else throw runtime_error("Line " + to_string(cur_token.line) + " : error");
+                result = result / parse_unary_exp();
+            }
+            if (cur_token.val == "%") {
+                next();
+                result = result % parse_unary_exp();
             }
         }
-
         return result;
     }
 
-    Variable parse_exp() {
+    Variable parse_additive_exp() {
         // +, -
-        Variable result = parse_term();
-        // if (cur_token.type == TokenType::EndOfFile) return val;
-
-        // cout << "prev: " + prev_token.val + " | cur: " + cur_token.val << endl;
+        Variable result = parse_multiplicative_exp();
         while (is_in(cur_token.val, unordered_set<string>{"+", "-"})) {
             if (cur_token.val == "+") {
                 next();
-                result = result + parse_term();
+                result = result + parse_multiplicative_exp();
             }
             if (cur_token.val == "-") {
                 next();
-                result = result - parse_term();
+                result = result - parse_multiplicative_exp();
             }
         }
-
         return result;
     }
 
-    Variable parse_relation_exp() {
-        // < <= > >=
-        Variable result = parse_exp();
-        if (cur_token.type == TokenType::EndOfFile)
-            return result;
+    Variable parse_shift_exp() {
+        // << >> ：cout/cin 為 DataType::Special（SpecialType 存名稱），其餘為位元移位
+        Variable result = parse_additive_exp();
+        while (is_in(cur_token.val, unordered_set<string>{"<<", ">>"})) {
+            const SpecialType *sp = get_if<SpecialType>(&result.val);
+            if (sp && sp->val == "cout" && cur_token.val == "<<") {
+                // 規範：cout << Expression 的值為 Expression 本身（鏈狀則為最後一個 Expression）
+                while (cur_token.val == "<<") {
+                    next();
+                    Variable out = parse_expression();
+                    // cout << "test | out.type: " << enum_to_DataType(out.type) << endl;
+                    // cout << var_to_string(out);
+                    result = out;
+                }
+            } else if (sp && sp->val == "cin" && cur_token.val == ">>") {
+                while (cur_token.val == ">>") {
+                    next();
+                    result = parse_expression();
+                    // 直譯器規範未實作 cin
+                }
+            } else {
+                if (cur_token.val == "<<") {
+                    next();
+                    result = result << parse_additive_exp();
+                } else if (cur_token.val == ">>") {
+                    next();
+                    result = result >> parse_additive_exp();
+                }
+            }
+        }
+        return result;
+    }   
 
+    Variable parse_relational_exp() {
+        // < <= > >=
+        Variable result = parse_shift_exp();
         static const unordered_map<string, function<Variable(Variable, Variable)>>
             op_map = {
                 {">", [](Variable a, Variable b) { return a > b; }},
                 {"<", [](Variable a, Variable b) { return a < b; }},
                 {">=", [](Variable a, Variable b) { return a >= b; }},
-                {"<=", [](Variable a, Variable b) { return a <= b; }},
-                {"==", [](Variable a, Variable b) { return a == b; }},
-                {"!=", [](Variable a, Variable b) { return a != b; }}
+                {"<=", [](Variable a, Variable b) { return a <= b; }}
             };
-            auto it = op_map.find(cur_token.val);
-            if (it != op_map.end()) {
-                next();
-                return it->second(result, parse_exp());
-            }
-            return result;
+        auto it = op_map.find(cur_token.val);
+        if (it != op_map.end()) {
+            next();
+            return it->second(result, parse_shift_exp());
+        }
+        return result;
     }
   
-    Variable parse_equal_exp() {
+    Variable parse_equality_exp() {
         // == !=
-        Variable result = parse_relation_exp();
+        Variable result = parse_relational_exp();
         if (cur_token.type == TokenType::EndOfFile)
             return result;
 
         while (is_in(cur_token.val, unordered_set<string>{"==", "!="})) {
             if (cur_token.val == "==") {
                 next();
-                result = result == parse_relation_exp();
+                result = result == parse_relational_exp();
             }
             if (cur_token.val == "!=") {
                 next();
-                result = result != parse_relation_exp();
+                result = result != parse_relational_exp();
             }
         }
         return result;
-   
+    }
+
+    // Variable parse_bitwise_and_exp()
+    // Variable parse_bitwise_xor_exp()
+    // Variable parse_bitwise_or_exp() 
+
+    // placeholder (因為PAL不支援位元運算)
+    Variable parse_bitwise_exp() {
+        Variable result = parse_equality_exp();
+        while (is_in(cur_token.val, {"&", "|", "^"})) {
+            if (cur_token.val == "&") {
+                next();
+                result = parse_equality_exp();
+            }
+            if (cur_token.val == "|") {
+                next();
+                result = parse_equality_exp();
+            }
+            if (cur_token.val == "^") {
+                next();
+                result = parse_equality_exp();
+            }
+        }
+        return result;
     }
   
-    Variable parse_and_exp() {
+    Variable parse_logical_and_exp() {
         // &&
-        Variable result = parse_equal_exp();
-        if (cur_token.type == TokenType::EndOfFile)
-            return result;
-
-        while (is_in(cur_token.val, {"&&"})) {
-            if (cur_token.val == "&&") {
-                next();
-                result = result && parse_equal_exp();
-            }
+        Variable result = parse_bitwise_exp();
+        while (cur_token.val == "&&") {
+            next();
+            result = result && parse_bitwise_exp();
         }
         return result;
-      }
+    }
   
-    Variable parse_or_exp() {
+    Variable parse_logical_or_exp() {
         // ||
-        Variable result = parse_and_exp();
-        if (cur_token.type == TokenType::EndOfFile)
-            return result;
-
-        while (is_in(cur_token.val, {"||"})) {
-            if (cur_token.val == "||") {
-                next();
-                result = result || parse_and_exp();
-            }
+        Variable result = parse_logical_and_exp();
+        while (cur_token.val == "||") {
+            next();
+            result = result || parse_logical_and_exp();
         }
         return result;
-      }
-
-    Variable parse_bool_exp() { 
-        Variable result = parse_or_exp();
-        // 已經遍歷了 || 活性最高，故可以將其視為這類表達式
+    }
+    
+    Variable parse_conditional_exp() { 
+        // ? :
+        Variable result = parse_logical_or_exp();
         if (cur_token.val == "?") {
-            next();
-            Variable true_val = parse_bool_exp(); 
-            
-            if (cur_token.val != ":") {
-                throw runtime_error("Line " + to_string(cur_token.line) + " : unexpected token : '" + cur_token.val + "'");
-            }
-            next();
-            Variable false_val = parse_bool_exp();
-            
-            if (bool(result)) {
-                return true_val;
-            } else {
-                return false_val;
+            // 先備份進入這個 AST 節點前的 dry_run 狀態
+            bool prev_dry_run = get_dry_run(); 
+            try {
+                next();
+                Variable true_val, false_val;
+                if (!bool(result)) {
+                    set_dry_run(true);
+                    true_val = parse_basic_exp(); 
+                    set_dry_run(prev_dry_run); // 嚴格還原，而非設為 false
+                } else {
+                    true_val = parse_basic_exp(); 
+                }
+                
+                if (cur_token.val != ":") {
+                    debug_msg(18);
+                    throw runtime_error("Line " + to_string(cur_token.line) + " : unexpected token : '" + cur_token.val + "'");
+                }
+                next();
+                
+                if (bool(result)) {
+                    set_dry_run(true);
+                    false_val = parse_basic_exp();
+                    set_dry_run(prev_dry_run); // 嚴格還原，而非設為 false
+                } else {
+                    false_val = parse_basic_exp();
+                }
+
+                if (bool(result)) return true_val;
+                else return false_val;
+                
+            } catch (...) {
+                set_dry_run(prev_dry_run); 
+                throw;
             }
         }
-        
         return result; 
     }
 
-    Variable parse_io(const string &type) {
-        // cin >> ident >> ident ...
-        // cout << bool_exp | exp << bool_exp | exp ...
-        Variable result;
-        if (type == "cin") {
-            next();
-            if (cur_token.val != ">>") {
-                throw runtime_error("Line " + to_string(cur_token.line) +
-                                    " : unexpected token : '" + cur_token.val + "'");
-            }
-
-            while (cur_token.val == ">>") {
-                next();
-                if (cur_token.type == TokenType::Ident) {
-                    Variable* target_var = cur_env->get(cur_token.val);
-                    if (target_var == nullptr) {
-                        throw runtime_error(
-                            "Line " + to_string(cur_token.line) +
-                            " : undefined identifier : '" + cur_token.val + "'"
-                        );
+    Variable parse_basic_exp() {
+        // 賦值 = += -= *= /= %=
+        // BasicExpression : Identifier [ '[' Expression ']' ] AssignmentOperator BasicExpression 
+        //                 | ConditionalExpression
+        bool is_assign = false;
+        if (cur_token.type == TokenType::Ident) {
+            Token next_token = lexer.peek_token(1);
+            if (is_in(next_token.val, {"=", "+=", "-=", "*=", "/=", "%="})) {
+                is_assign = true;
+            } else if (next_token.val == "[") {
+                int i = 2;
+                int b_count = 1;
+                while (b_count > 0) {
+                    Token t = lexer.peek_token(i++);
+                    if (t.type == TokenType::EndOfFile || t.type == TokenType::Semicolon) break;
+                    if (t.val == "[") b_count++;
+                    else if (t.val == "]") b_count--;
+                }
+                if (b_count == 0) {
+                    Token t_after = lexer.peek_token(i);
+                    if (is_in(t_after.val, {"=", "+=", "-=", "*=", "/=", "%="})) {
+                        is_assign = true;
                     }
-                    // 目前沒實作cin，所以先空著
-                    /*
-                    if (target_var->type == DataType::Int) {
-                        int input_val;
-                        cin >> input_val;
-                        *target_var = Variable(input_val);
-                    } else if (target_var->type == DataType::Float) {
-                        double input_val;
-                        cin >> input_val;
-                        *target_var = Variable(input_val);
-                    } else if (target_var->type == DataType::String) {
-                        string input_val;
-                        cin >> input_val;
-                        *target_var = Variable(input_val);
-                    }
-                    */
-                    next();
-                } else {
-                    throw runtime_error("Line " + to_string(cur_token.line) + " : unexpected token : '" + cur_token.val + "'");
                 }
             }
-            // cout << "Statement executed ..." << endl;
-            result = {DataType::Int, ""};
+        }
 
-        } else if (type == "cout") {
+        if (is_assign) {
+            Variable* lval = parse_ident_lvalue();
+            string op = cur_token.val;
             next();
-            if (cur_token.val != "<<") {
-                throw runtime_error("Line " + to_string(cur_token.line) +
-                                    " : unexpected token : '" + cur_token.val + "'");
+            Variable exp_val = parse_basic_exp();
+            Variable result;
+            if (!dry_run) {
+                if (op == "=") *lval = exp_val;
+                else if (op == "+=") *lval += exp_val;
+                else if (op == "-=") *lval -= exp_val;
+                else if (op == "*=") *lval *= exp_val;
+                else if (op == "/=") *lval /= exp_val;
+                else if (op == "%=") *lval %= exp_val;
+                result = *lval;
             }
-            while (cur_token.val == "<<") {
-                next();
-                if (cur_token.type == TokenType::Ident) {
-                    if (cur_env->get(cur_token.val) == nullptr) {
-                        throw runtime_error("Line " + to_string(cur_token.line) + " : undefined identifier : '" + cur_token.val + "'");
-                    }
-                    // cout << ident_table[cur_token.val].val;
-                    next();
-                } else {
-                    result = parse_exp();
-                    // cout << result.val;
-                }
-            }
-            // cout << "Statement executed ..." << endl;
+            return result;
         } else {
-            throw runtime_error("Line " + to_string(cur_token.line) + " : unexpected token : '" + type + "'");
+            return parse_conditional_exp();
+        }
+    }
+
+    Variable parse_expression() {
+        // ,
+        Variable result = parse_basic_exp();
+        while (cur_token.val == ",") {
+            next();
+            result = parse_basic_exp();
         }
         return result;
     }
 
     bool parse_condition() {
+        // cur_token is '(' end after ')'
+        // ( Expression )
         if (cur_token.val != "(") {
+            debug_msg(19);
             throw runtime_error("Line " + to_string(cur_token.line) + " : unexpected token : '" + cur_token.val + "'");
         }
         next();
-        Variable result = parse_bool_exp();
+        Variable result = parse_expression();
+        if (debug && cur_token.val == ")") cout << "Debug condition: " << cur_token.val << " " << lexer.peek_token().val << endl; 
         if (cur_token.val != ")") {
+            debug_msg(20);
             throw runtime_error("Line " + to_string(cur_token.line) + " : unexpected token : '" + cur_token.val + "'");
         }
         next();
@@ -1597,28 +1873,32 @@ private:
 
     void skip_token() {
         prev_token = cur_token;
-        cur_token = lexer.get_next_token(1);
+        cur_token = lexer.get_next_token();
     }
 
     void process_parens_in_skip() {
         if (cur_token.val == "(" || cur_token.val == "[" || cur_token.val == "{") {
             parens_stack.push_back(cur_token);
-        } else if (cur_token.val == ")" || cur_token.val == "]" ||
-               cur_token.val == "}") {
+        } else if (cur_token.val == ")" || cur_token.val == "]" || cur_token.val == "}") {
             if (!parens_stack.empty()) {
                 bool match = false;
                 if (cur_token.val == ")" && parens_stack.back().val == "(") match = true;
                 if (cur_token.val == "]" && parens_stack.back().val == "[") match = true;
                 if (cur_token.val == "}" && parens_stack.back().val == "{") match = true;
                 if (match) parens_stack.pop_back();
-                else throw runtime_error("Line " + to_string(cur_token.line) + " : unexpected token : '" + cur_token.val + "'");
+                else {
+                    debug_msg(21);
+                    throw runtime_error("Line " + to_string(cur_token.line) + " : unexpected token : '" + cur_token.val + "'");
+                }
             } else {
+                debug_msg(22);
                 throw runtime_error("Line " + to_string(cur_token.line) + " : unexpected token : '" + cur_token.val + "'");
             }
         }
     }
 
     void skip_statement() {
+        // TODO 這裡會如何處理邏輯
         size_t start_idx = lexer.get_last_token_start_idx();
         int start_line = cur_token.line;
 
@@ -1655,14 +1935,39 @@ private:
                 }
             }
             skip_statement();
+        } else if (cur_token.val == "do") {
+            skip_token();
+            skip_statement();
+            if (cur_token.val == "while") {
+                skip_token();
+                if (cur_token.val == "(") {
+                    parens_stack.push_back(cur_token);
+                    skip_token();
+                    while (!parens_stack.empty() && cur_token.type != TokenType::EndOfFile) {
+                        process_parens_in_skip();
+                        skip_token();
+                    }
+                }
+                if (cur_token.val == ";") {
+                    skip_token();
+                } else {
+                    debug_msg(23);
+                    throw runtime_error("Line " + to_string(cur_token.line) + " : unexpected token : '" + cur_token.val + "'");
+                }
+            } else {
+                debug_msg(24);
+                throw runtime_error("Line " + to_string(cur_token.line) + " : unexpected token : '" + cur_token.val + "'");
+            }
         } else {
             while (cur_token.val != ";" && cur_token.type != TokenType::EndOfFile) {
                 process_parens_in_skip();
                 skip_token();
             }
             if (cur_token.val == ";") {
-                if (!parens_stack.empty())
+                if (!parens_stack.empty()) {
+                    debug_msg(25);
                     throw runtime_error("Line " + to_string(cur_token.line) + " : unexpected token : ';'");
+                }
                 skip_token();
             }
         }
@@ -1677,7 +1982,7 @@ private:
             try {
                 Parser temp_parser(skipped_code, start_line);
                 temp_parser.set_dry_run(true);
-                temp_parser.parse_statement(false, false);
+                temp_parser.parse_statement(false);
             } catch (const exception &e) {
                 cur_env = old_env;
                 throw runtime_error(e.what());
@@ -1687,17 +1992,12 @@ private:
         }
     }
     void parse_if_else() {
-        if (cur_token.val != "if") {
-            throw runtime_error("Line " + to_string(cur_token.line) + " : unexpected token : '" + cur_token.val + "'");
-        }
-
+        // start at "if"
         bool condition_met = false;
         next();
-
         bool condition = parse_condition();
-
         if (condition) {
-            parse_statement(false, false);
+            parse_statement(false);
             condition_met = true;
         } else {
             skip_statement();
@@ -1709,14 +2009,14 @@ private:
                 next();
                 condition = parse_condition();
                 if (!condition_met && condition) {
-                    parse_statement(false, false);
+                    parse_statement(false);
                     condition_met = true;
                 } else {
                     skip_statement();
                 }
             } else {
                 if (!condition_met) {
-                    parse_statement(false, false);
+                    parse_statement(false);
                     condition_met = true;
                 } else {
                     skip_statement();
@@ -1725,6 +2025,7 @@ private:
             }
         }
     }
+
     void parse_while() {
         bool condition;
         if (cur_token.val == "while") {
@@ -1737,7 +2038,7 @@ private:
             int execution_steps = 0;
             while (condition && execution_steps <= MAX_STEPS) {
                 execution_steps++;
-                parse_statement(false, false);
+                parse_statement(false);
                 lexer.back_to_checkpoint();
                 next();
                 condition = parse_condition();
@@ -1747,9 +2048,46 @@ private:
             }
             lexer.pop_checkpoint();
         } else {
+            debug_msg(27);
             throw runtime_error("Line " + to_string(cur_token.line) + " : unexpected token : '" + cur_token.val + "'");
         }
     }
+
+    void parse_do_while() {
+        bool condition;
+        if (cur_token.val == "do") {
+            lexer.push_checkpoint(); // 從do後面開始
+            next();
+
+            int execution_steps = 0;
+            do {
+                execution_steps++;
+                parse_statement(false);
+                if (cur_token.val != "while") {
+                    debug_msg(28);
+                    throw runtime_error("Line " + to_string(cur_token.line) + " : unexpected token : '" + cur_token.val + "'");
+                }
+                next();
+                condition = parse_condition();
+                if (cur_token.val != ";") {
+                    debug_msg(29);
+                    throw runtime_error("Line " + to_string(cur_token.line) + " : unexpected token : '" + cur_token.val + "'");
+                }
+                if (condition && execution_steps <= MAX_STEPS) {
+                    lexer.back_to_checkpoint();
+                    next();
+                } else {
+                    next(); // pass ';'
+                    break;
+                }
+            } while (true);
+            lexer.pop_checkpoint();
+        } else {
+            debug_msg(30);
+            throw runtime_error("Line " + to_string(cur_token.line) + " : unexpected token : '" + cur_token.val + "'");
+        }
+    }
+
     void parse_block() {
         auto new_env = make_shared<Environment>(cur_env);
         cur_env = new_env;
@@ -1757,7 +2095,7 @@ private:
             if (cur_token.val == "{") {
                 next();
                 while (cur_token.val != "}") {
-                    parse_statement(false, false);
+                    parse_statement(false);
                 }
                 next();
             }
@@ -1768,6 +2106,7 @@ private:
         cur_env = cur_env->parent;
     }
     void parse_function_block(string block_str, unordered_map<string, Variable> formatted_params) {
+        // CompoundStatement : '{' { LocalDeclaration | Statement } '}'
         auto new_env = make_shared<Environment>(cur_env);
         cur_env = new_env;
         for (auto &param : formatted_params) {
@@ -1780,8 +2119,8 @@ private:
         try {
             if (block_parser.cur_token.val == "{") {
                 block_parser.next();
-                while (block_parser.cur_token.val != "}" && !block_parser.is_eof()) {
-                    block_parser.parse_statement(false, false);
+                while (block_parser.cur_token.val != "}") {
+                    block_parser.parse_statement(false);
                 }
             }
         } catch (...) {
@@ -1792,191 +2131,219 @@ private:
     }
     vector<StatePair> parse_variable_declaration(DataType type = DataType::Void) {
         // cur_token is type
-        // <VariableDeclaration> ::= <Type> <Ident> [ "[" <Expression> "]" ] ;
-        // <MultiVariableDeclaration> ::= <Type> <Ident> [ "[" <Expression> "]" ] {
-        // , <Ident> [ "[" <Expression> "]" ] } ;
+        // <VariableDeclaration> ::= <Type> <Ident> [ "[" <Expression> "]" ] { "," <Ident> [ "[" <Expression> "]" ] } ";"
         vector<StatePair> state_pairs;
-        Token id_token, mark_token;
+        
+        struct PendingDeclaration {
+            string name;
+            Variable var;
+            State state;
+        };
+        vector<PendingDeclaration> pending_declarations;
+
+        auto parse_an_identifier_declaration = [&]() -> void {
+            // like { ident , } 假設是ident 若不是則會在後面被next捕捉到
+            if (keywords.find(cur_token.val) != keywords.end() || is_in(cur_token.val, symbols)) {
+                debug_msg(32);
+                throw runtime_error("Line " + to_string(cur_token.line) + " : unexpected token : '" + cur_token.val + "'");
+            }
+            State cur_state = State::Definition;
+            Token id_token = cur_token;
+            if (cur_env->get(id_token.val) != nullptr) {
+                cur_state = State::NewDefinition;
+            }
+
+            Variable new_var;
+            if (lexer.peek_token().val == "[") {
+                next(); // move to '['
+                next(); // move to expression start
+                Variable size_var = parse_expression();
+                int size = -1;
+                if (auto i = get_if<int>(&size_var.val)) {
+                    size = *i;
+                }
+                if (cur_token.val != "]") {
+                    debug_msg(31);
+                    throw runtime_error("Line " + to_string(cur_token.line) + " : unexpected token : '" + cur_token.val + "'");
+                }
+                next();
+                new_var = Variable{type, size};
+            } else {
+                next();
+                new_var = Variable{type};
+            }
+            pending_declarations.push_back({id_token.val, new_var, cur_state});
+        };
+
         // 基底型態
         if (is_in(cur_token.val, data_types)) {
             type = DataType_to_enum(cur_token.val);
         } else {
-            throw runtime_error("Line " + to_string(cur_token.line) +
-                              " : unexpected token : '" + cur_token.val + "'");
+            debug_msg(32);
+            throw runtime_error("Line " + to_string(cur_token.line) + " : unexpected token : '" + cur_token.val + "'");
         }
-        id_token = lexer.peek_token();
-        mark_token = lexer.peek_token(2);
-        while (true) {
-            // 現在在type上
-            if (id_token.type != TokenType::Ident) {
-                throw runtime_error("Line " + to_string(id_token.line) +
-                                " : unexpected token : '" + id_token.val + "'");
-            }
+        next(); // move to ident
+        parse_an_identifier_declaration();
+        while (cur_token.val == ",") {
+            next();
+            parse_an_identifier_declaration();
+        }
 
-            string name = id_token.val;
-            State state = State::Definition;
-            if (cur_env->get(name) != nullptr) {
-                state = State::NewDefinition;
-            }
-
-            Variable var = Variable(type, "");
-
-            if (mark_token.val == "[") {
-                // 此階段進去看exp
-                next(3);
-                auto size_var = parse_exp().val;
-                int arr_size = 0;
-                if (holds_alternative<int>(size_var)) {
-                    arr_size = get<int>(size_var);
-                } else if (holds_alternative<double>(size_var)) {
-                    arr_size = static_cast<int>(get<double>(size_var));
-                } else {
-                    throw runtime_error("Line " + to_string(cur_token.line) +
-                                      " : unexpected token : '" + cur_token.val + "'");
-                }
-
-                if (cur_token.val != "]") {
-                    throw runtime_error("Line " + to_string(cur_token.line) + " : unexpected token : '" + cur_token.val + "'");
-                }
-                next(); // move past ]
-
-                var.size = arr_size;
-                auto array_ptr = make_shared<ArrayType>(arr_size);
-                for (int i = 0; i < arr_size; ++i) {
-                    (*array_ptr)[i] = Variable(type, "");
-                }
-                var.val = array_ptr;
-            } else {
-                // 此階段跳過兩個標點符號
-                next(2);
-            }
-
-            cur_env->declare(name, var);
-            state_pairs.push_back({name, state});
-
-            id_token = lexer.peek_token();
-            mark_token = lexer.peek_token(2);
-            // cout << "id_token: " << id_token.val << " | mark_token: " <<
-            // mark_token.val << endl;
-
-            if (cur_token.val == ";") {
-                break;
-            }
+        // 只有在全部解析成功後，才正式宣告到環境中
+        if (cur_token.val != ";") {
+            debug_msg(33);
+            throw runtime_error("Line " + to_string(cur_token.line) + " : unexpected token : '" + cur_token.val + "'");
+        }
+        for (auto &decl : pending_declarations) {
+            cur_env->declare(decl.name, decl.var);
+            state_pairs.push_back({decl.name, decl.state});
         }
 
         return state_pairs;
     }
 
     vector<FunctionParam> parse_function_declaration_params() {
-        // <Params> ::= ( <Type> <Ident> { , <Type> <Ident> } | <Empty> )
-        // 定義函式的參數
+        // cur_token is data type
+        // <Params> ::= ( <Type> <Ident> { , <Type> <Ident> } | <Empty> | <VOID> )
         vector<FunctionParam> params;
-        Token next_token1 = lexer.peek_token();
-        Token next_token2 = lexer.peek_token(2);
-        auto parse_params = [&]() -> void {
-            Token next_token1 = lexer.peek_token();
-            Token next_token2 = lexer.peek_token(2);
-            if (is_in(next_token1.val, data_types)) {
-                if (next_token2.type == TokenType::Ident) {
-                    params.push_back(
-                        {DataType_to_enum(next_token1.val), next_token2.val});
-                    next(3);
-                } else {
-                    throw runtime_error("Line " + to_string(next_token2.line) + " : unexpected token : '" + next_token2.val + "'");
+        auto parse_a_param = [&]() -> void {
+            DataType type = DataType_to_enum(cur_token.val);
+            next(); // move to ident
+            int size = -1;
+            bool is_ref = false;
+            if (cur_token.val == "&") {
+                is_ref = true;
+                next();
+            }
+            if (cur_token.type == TokenType::Ident) {
+                Token id_token = cur_token;
+                next();
+                if (cur_token.val == "[") {
+                    next(); // move to size
+                    Variable size_var = parse_expression();
+                    if (auto i = get_if<int>(&size_var.val)) {
+                        size = *i;
+                    } else {
+                        // throw runtime_error("Line " + to_string(cur_token.line) + " : unexpected token : '" + cur_token.val + "'");
+                    }
+                    if (cur_token.val != "]") {
+                        debug_msg(33);
+                        throw runtime_error("Line " + to_string(cur_token.line) + " : unexpected token : '" + cur_token.val + "'");
+                    }
+                    next();
                 }
+                params.push_back({type, id_token.val, size, is_ref});
             } else {
-                throw runtime_error("Line " + to_string(next_token1.line) + " : unexpected token : '" + next_token1.val + "'");
+                debug_msg(34);
+                throw runtime_error("Line " + to_string(cur_token.line) + " : unexpected token : '" + cur_token.val + "'");
             }
         };
+        // main logic (start at "(", end after ")")
         if (cur_token.val == "(") {
-            if (next_token1.val == ")") {
-                next(); // move to ')' to let parse_function_declaration handle it
-                return params;
-            } else {
-                parse_params();
-                while (cur_token.val == ",") {
-                    parse_params();
-                }
-                if (cur_token.val != ")") {
-                    throw runtime_error("Line " + to_string(cur_token.line) + " : unexpected token : '" + cur_token.val + "'");
-                }
-                // already at ')'
-            }
-        } else {
-            throw runtime_error("Line " + to_string(cur_token.line) + " : unexpected token : '" + cur_token.val + "'");
-        }
-        return params;
-    }
-
-    vector<Variable> parse_function_params() {
-        // <Params> ::= "(" <BoolExpression> | <Expression> { , <BoolExpression> |
-        // <Expression> } ")" | "()" ident = exp 可能會看成expression
-        // 被函式呼叫的參數，也就是輸入參數
-        vector<Variable> params;
-        Token next_token1 = lexer.peek_token();
-        if (cur_token.val == "(") {
-            if (next_token1.val == ")") {
-                next(2);
-                return params;
+            // () and (void)
+            if (lexer.peek_token().val == ")") {
+                next(); 
+            } else if (lexer.peek_token().val == "void" && lexer.peek_token(2).val == ")") {
+                next();
+                next();
             } else {
                 next();
-                params.push_back(parse_bool_exp());
+                parse_a_param();
                 while (cur_token.val == ",") {
                     next();
-                    params.push_back(parse_bool_exp());
+                    parse_a_param();
                 }
                 if (cur_token.val != ")") {
+                    debug_msg(35);
                     throw runtime_error("Line " + to_string(cur_token.line) + " : unexpected token : '" + cur_token.val + "'");
                 }
                 next();
             }
         } else {
+            debug_msg(36);
             throw runtime_error("Line " + to_string(cur_token.line) + " : unexpected token : '" + cur_token.val + "'");
         }
         return params;
     }
 
     StatePair parse_function_declaration() {
-        // <Function> ::= <Type> <Ident> "(" <Params> {"," <Params>} ")" (<Block> | <Statement>) | <BuiltInFunction>
-        DataType type = DataType_to_enum(cur_token.val);
-        string name = lexer.peek_token().val;
+        // cur_token is data type
+        // FunctionDefinition           : '(' [ VOID | FormalParameters ] ')' CompoundStatement
+        // Example: (int a, float b[5]) { ... }
+        // TODO: void 處理
         State state = State::Definition;
-        if (cur_token.type != TokenType::Ident && keywords.find(cur_token.val) == keywords.end()) {
+        DataType type = DataType_to_enum(cur_token.val);
+        next(); // move to ident
+
+        if (cur_token.type != TokenType::Ident || keywords.find(cur_token.val) != keywords.end()) {
+            debug_msg(37);
             throw runtime_error("Line " + to_string(cur_token.line) + " : unexpected token : '" + cur_token.val + "'");
         }
-        next(2);
+        string name = cur_token.val;
+        next(); // move to '('
+
         if (func_table.find(name) != func_table.end()) {
             state = State::NewDefinition;
         }
+
         vector<FunctionParam> params = parse_function_declaration_params();
         string block_str = lexer.get_a_block();
         cur_token = lexer.get_next_token();
         func_table[name] = Function{type, params, block_str};
-        return {name + "()", state};
+        return {name + "()", state}; // 輸入至註冊表時不需顯示參數
+    }
+
+    vector<Variable> parse_function_params() {
+        // cur_token is '(' end at ';'
+        // <Params> ::= "(" <Expression> { , <Expression> } ")" | "()"
+        // 被函式呼叫的參數，也就是輸入參數
+        vector<Variable> params;
+        if (cur_token.val == "(") {
+            next();
+            if (cur_token.val == ")") {
+                next();
+                return params;
+            } else {
+                params.push_back(parse_conditional_exp());
+                while (cur_token.val == ",") {
+                    next();
+                    params.push_back(parse_conditional_exp());
+                }
+                if (cur_token.val != ")") {
+                    debug_msg(38);
+                    throw runtime_error("Line " + to_string(cur_token.line) + " : unexpected token : '" + cur_token.val + "'");
+                }
+                next();
+            }
+        } else {
+            debug_msg(39);
+            throw runtime_error("Line " + to_string(cur_token.line) + " : unexpected token : '" + cur_token.val + "'");
+        }
+        return params;
     }
 
     Variable parse_function_call() {
+        // FunctionCall ::= Identifier [ '(' [ Parameters ] ')' ]
         string function_name = cur_token.val;
         next();
         vector<Variable> params = parse_function_params();
         
+        // 在輸入數量不符的參數時一律不執行也不報錯
         if (function_name == "ListAllVariables") {
-            if (!dry_run) ListAllVariables(params);
+            if (!dry_run && params.size() == 0) ListAllVariables(); 
         } else if (function_name == "ListAllFunctions") {
-            if (!dry_run) ListAllFunctions(params);
+            if (!dry_run && params.size() == 0) ListAllFunctions();
         } else if (function_name == "ListVariable") {
-            if (!dry_run) ListVariable(params);
+            if (!dry_run && params.size() == 1) ListVariable(params);
         } else if (function_name == "ListFunction") {
-            if (!dry_run) ListFunction(params);
+            if (!dry_run && params.size() == 1) ListFunction(params);
         } else if (function_name == "Done") {
-            if (!dry_run) Done();
+            if (!dry_run && params.size() == 0) Done(); 
+        // TODO: 如何檢查自訂函數的輸入值? 此時只須確保文法正確
         } else if (func_table.find(function_name) != func_table.end()) {
             unordered_map<string, Variable> formatted_params = format_params(func_table[function_name].params, params);
-            
             DataType old_return_type = current_return_type;
             current_return_type = func_table[function_name].return_type;
-
-            // --- 關鍵 dry_run 判斷 ---
             if (!dry_run) {
                 try {
                     parse_function_block(func_table[function_name].content, formatted_params);
@@ -1985,14 +2352,14 @@ private:
                     return re.value;
                 }
             }
-            
-            current_return_type = old_return_type; 
-            
-            // 賦值時，確保回傳的型態符合基底型態，否則之後 parse_exp 會錯
+            current_return_type = old_return_type;
+            // TODO: 函數輸出可以不用依照宣告型別
+            // TODO: 在輸入型別或數量不符時印出警告測試訊息 (意味著程式本身有錯) 因測資保證輸入正確型別及數量
             if (func_table[function_name].return_type == DataType::Void) return Variable();
-            return Variable(func_table[function_name].return_type, ""); 
+            return Variable(func_table[function_name].return_type);
         } else {
-            throw runtime_error("Line " + to_string(cur_token.line) + " : unexpected token : '" + function_name + "'");
+            debug_msg(40);
+            throw runtime_error("Line " + to_string(cur_token.line) + " : undefined identifier : '" + function_name + "'");
         }
         return Variable();
     }
@@ -2003,143 +2370,144 @@ private:
         Variable value;
         // 處理回傳型態
         if (cur_token.val != ";") {
-            value = parse_bool_exp();
+            value = parse_conditional_exp();
         }
-
         // 檢查回傳值是否與預期相符
-        if (current_return_type == DataType::Void && value.type != DataType::Void) {
-            // throw runtime_error("Line " + to_string(cur_token.line) + " : void function cannot return a value");
-        } else if (current_return_type != DataType::Void && value.type == DataType::Void) {
-            // throw runtime_error("Line " + to_string(cur_token.line) + " : non-void function must return a value");
-        } else if (current_return_type != DataType::Void && value.type != current_return_type) {
-            // 如果型態不一致，嘗試進行型態轉換
-            if (current_return_type == DataType::Float && value.type == DataType::Int) {
-                value = Variable(static_cast<double>(get<int>(value.val)));
-            } else if (current_return_type == DataType::Int && value.type == DataType::Float) {
-                value = Variable(static_cast<int>(get<double>(value.val)));
-            } else if (current_return_type == DataType::Bool && (value.type == DataType::Int || value.type == DataType::Float)) {
-                value = Variable(bool(value)); // 依賴內建型態轉換 explicit operator bool
-            } else {
-                throw runtime_error("Line " + to_string(cur_token.line) + " : return type mismatch (" + enum_to_DataType(value.type) + " to " + enum_to_DataType(current_return_type) + ")");
-            }
-        }
-
+        // if (current_return_type == DataType::Void && value.type != DataType::Void) {
+        //     // throw runtime_error("Line " + to_string(cur_token.line) + " : void function cannot return a value");
+        // } else if (current_return_type != DataType::Void && value.type == DataType::Void) {
+        //     // throw runtime_error("Line " + to_string(cur_token.line) + " : non-void function must return a value");
+        // } else if (current_return_type != DataType::Void && value.type != current_return_type) {
+        //     // 如果型態不一致，嘗試進行型態轉換
+        //     if (current_return_type == DataType::Float && value.type == DataType::Int) {
+        //         value = Variable(static_cast<double>(get<int>(value.val)));
+        //     } else if (current_return_type == DataType::Int && value.type == DataType::Float) {
+        //         value = Variable(static_cast<int>(get<double>(value.val)));
+        //     } else if (current_return_type == DataType::Bool && (value.type == DataType::Int || value.type == DataType::Float)) {
+        //         value = Variable(bool(value)); // 依賴內建型態轉換 explicit operator bool
+        //     } else {
+        //         // throw runtime_error("Line " + to_string(cur_token.line) + " : return type mismatch (" + enum_to_DataType(value.type) + " to " + enum_to_DataType(current_return_type) + ")");
+        //     }
+        // }
         // 強制完成解析
         if (cur_token.val != ";") {
+            debug_msg(41);
             throw runtime_error("Line " + to_string(cur_token.line) + " : unexpected token : '" + cur_token.val + "'");
         }
         next();
-        throw ReturnException{value};
+        // throw ReturnException{value}; // TODO
     }
 
-    ReturnState parse_statement(bool sub_statement = false, bool reset_after_statement = true) {
+    ReturnState parse_statement(bool reset_after_statement = true) {
+        // 進入所有方法的第一個token必須保證是正確的
+        /*
+        Statement   : ';' 
+                    | Expression ';' 
+                    | RETURN [ Expression ] ';'                             (return)
+                    | CompoundStatement                                     ('{')
+                    | IF '(' Expression ')' Statement [ ELSE Statement ]    ('if')
+                    | WHILE '(' Expression ')' Statement                    ('while')
+                    | DO Statement WHILE '(' Expression ')' ';'             ('do')
+        */
         static const unordered_map<string, DataType> type_map = {
             {"int", DataType::Int},
             {"float", DataType::Float},
             {"bool", DataType::Bool},
             {"char", DataType::Char},
-            {"string", DataType::String}
+            {"string", DataType::String},
+            {"void", DataType::Void} // 支援 void 作為 function declaration
         };
         ReturnState return_states;
         return_states.clear();
 
-        Token id_token = lexer.peek_token(1);
-        string mark = lexer.peek_token(2).val;
+        Token next_token1 = lexer.peek_token(1);
+        Token next_token2 = lexer.peek_token(2);
         vector<StatePair> states;
+        require_semicolon = true; // 預設每個 statement 都需要分號，除了 block or flow control
 
-        if (cur_token.val == "(") {
-            next();
-            parse_statement(true, false);
-            if (cur_token.val != ")") {
-                throw runtime_error(
-                    "Line " + to_string(cur_token.line) +
-                    " : unexpected token : '" + cur_token.val + "'"
-                );
+        // 條件 1: Function Definition / Variable Declaration (非純 Statement 標準文法，但為 Global Scope 宣告入口)
+        if (cur_token.type == TokenType::Ident &&
+            type_map.find(cur_token.val) != type_map.end()) {
+            if (next_token1.type != TokenType::Ident) {
+                if (symbols.find(next_token1.val) == symbols.end()) {
+                    debug_msg(42);
+                    throw runtime_error("Line " + to_string(cur_token.line) + " : unrecognized token with first char : '" + next_token1.val[0] + "'");
+                } else {
+                    debug_msg(43);
+                    throw runtime_error("Line " + to_string(cur_token.line) + " : unexpected token : '" + next_token1.val + "'");
+                }
             }
-            return_states.push({"", State::Statement});
-            require_semicolon = true;
-            next();
-        } else if (cur_token.type == TokenType::Ident &&
-                   type_map.find(cur_token.val) != type_map.end() &&
-                   id_token.type == TokenType::Ident &&
-                   keywords.find(id_token.val) == keywords.end()) {
-            if (mark == "(") {
+
+            if (next_token2.val == "(") {
+                // 實作: Function Declaration
                 return_states.push(parse_function_declaration());
                 require_semicolon = false;
-            } else if (mark == ";" || mark == "[" || mark == ",") {
+            } else {
+                // 實作: Variable Declaration
                 states = parse_variable_declaration();
                 return_states.states.insert(return_states.states.end(), states.begin(), states.end());
                 require_semicolon = true;
-            } else {
-                throw runtime_error(
-                    "Line " + to_string(cur_token.line) +
-                    " : unexpected token : '" + cur_token.val + "'"
-                );
             }
-        } else if (cur_token.type == TokenType::Ident &&
-                   lexer.peek_token().val == "=" &&
-                   cur_env->get(cur_token.val) != nullptr) {
-            Token id_token = cur_token;
-            next(2);
-            Variable result = parse_bool_exp();
-            if (!dry_run) {
-                cur_env->set(id_token.val, result);
-            }
-            return_states.push({"", State::Statement});
-            require_semicolon = true;
-        } else if (cur_token.val == "if" || cur_token.val == "else") {
+        // 條件 2: IF '(' Expression ')' Statement [ ELSE Statement ]
+        } else if (cur_token.val == "if") {
             parse_if_else();
             return_states.push({"", State::Statement});
-            require_semicolon = false;
+            require_semicolon = false; // 已包含最後的 ';' 處理
+        // 條件 3: WHILE '(' Expression ')' Statement
         } else if (cur_token.val == "while") {
             parse_while();
             return_states.push({"", State::Statement});
-            require_semicolon = false;
-        } else if (cur_token.val == "cin" || cur_token.val == "cout") {
-            parse_io(cur_token.val);
+            require_semicolon = false; // 已包含最後的 ';' 處理
+        // 條件 4: DO Statement WHILE '(' Expression ')' ';'
+        } else if (cur_token.val == "do") {
+            parse_do_while();
             return_states.push({"", State::Statement});
-            require_semicolon = true;
-        } else if (cur_token.type == TokenType::Ident &&
-                   func_table.find(cur_token.val) != func_table.end()) {
-            parse_function_call();
-            return_states.push({"", State::Statement});
-            require_semicolon = true;
+            require_semicolon = false; // parse_do_while 內部已經處理了其結尾必備的 ';'
+        // 條件 5: CompoundStatement ( { ... } )
         } else if (cur_token.val == "{") {
             parse_block();
             return_states.push({"", State::Statement});
-            require_semicolon = false;
+            require_semicolon = false; // block 結束符號是 '}' 故不需要分號
+        // 條件 6: RETURN [ Expression ] ';'
         } else if (cur_token.val == "return") {
+            // 實作: Return Statement
             parse_return();
+            // parse_return 會 throw ReturnException，正常運作時不會執行到這裡
             return_states.push({"", State::Statement});
             return return_states;
-        } else {
-            parse_bool_exp();
+        // 條件 7: ';' (Empty Statement)
+        } else if (cur_token.type == TokenType::Semicolon) {
+            // 實作: Empty Statement 
             return_states.push({"", State::Statement});
-            require_semicolon = true;
+            require_semicolon = true; // 由底下的掃描邏輯來消耗這個 ';'
+        // 條件 8: Expression ';'
+        } else {
+            // 實作: Expression Statement (包含函式呼叫、指派運算等所有運算式)
+            parse_expression();
+            return_states.push({"", State::Statement});
+            require_semicolon = true; // 運算式結束後必須有分號
         }
 
-        if (!sub_statement) {
-            if (require_semicolon && cur_token.type != TokenType::Semicolon) {
-                throw runtime_error(
-                    "Line " + to_string(cur_token.line) +
-                    " : unexpected token : '" + cur_token.val + "'"
-                );
-            } else if (cur_token.type == TokenType::Semicolon) {
-                if (reset_after_statement) {
-                    prev_token = cur_token;
-                    cur_token = lexer.get_next_token(1);
-                    lexer.finish_outer_statement(cur_token);
-                } else {
-                    next();
-                }
-            } else if (reset_after_statement) {
+        // 後處理：分號檢測與狀態更新
+        if (require_semicolon && cur_token.type != TokenType::Semicolon) {
+            debug_msg(42);
+            throw runtime_error("Line " + to_string(cur_token.line) + " : unexpected token : '" + cur_token.val + "'");
+        } else if (require_semicolon && cur_token.type == TokenType::Semicolon) {
+            if (reset_after_statement) {
+                prev_token = cur_token;
+                cur_token = lexer.get_next_token();
                 lexer.finish_outer_statement(cur_token);
+            } else {
+                next(); // 單純略過 ';'
             }
+        } else if (reset_after_statement) {
+            lexer.finish_outer_statement(cur_token); // 無需分號但需要 reset 行狀態時
         }
         return return_states;
     }
 public:
     void set_dry_run(bool mode) { dry_run = mode; } // <-- 關鍵：跳過賦值
+    bool get_dry_run() const { return dry_run; }
     
     Parser(const string &input, int start_line = 1) 
         : lexer(input, start_line) {
@@ -2171,7 +2539,9 @@ public:
         lexer.reset_line();
         require_semicolon = true;
         if (!lexer.get_rest_str().empty()) {
+            if (debug) cout << "Debug: " << cur_token.val << endl;
             cur_token = lexer.get_next_token();
+            if (debug) cout << "Debug: " << cur_token.val << endl;
         } else {
             cur_token = {TokenType::EndOfFile, ""};
         }
@@ -2200,10 +2570,12 @@ public:
 
 // ========================================Built-in Functions========================================
 
-void ListAllVariables(const vector<Variable> &variables) {
+void ListAllVariables() {
     vector<string> var_names;
     for (const auto &pair : cur_env->ident_table) {
-        var_names.push_back(pair.first);
+        if (pair.second.type != DataType::Special) {
+            var_names.push_back(pair.first); // name
+        }
     }
     sort(var_names.begin(), var_names.end());
     for (const auto &name : var_names) {
@@ -2211,7 +2583,7 @@ void ListAllVariables(const vector<Variable> &variables) {
     }
 }
 
-void ListAllFunctions(const vector<Variable> &functions) {
+void ListAllFunctions() {
     vector<string> func_names;
     for (const auto &pair : func_table) {
         func_names.push_back(pair.first);
@@ -2227,14 +2599,18 @@ void ListVariable(const vector<Variable> &variables) {
         format_params(builtin_func_table["ListVariable"].params, variables)["name"]);
     if (cur_env->get(name) != nullptr) {
         Variable var = *cur_env->get(name);
-        if (holds_alternative<shared_ptr<ArrayType>>(var.val)) {
+        // TODO: 需要實作ArrayType邏輯
+        // if (holds_alternative<shared_ptr<ArrayType>>(var.val)) {
+        if (var.size != -1) {
             cout << enum_to_DataType(var.type) << " " << name << "[ " << var.size
                  << " ] ;" << endl;
+        } else if (var.type == DataType::Special) {
+            cout << name << " is a system variable.";
         } else {
             cout << enum_to_DataType(var.type) << " " << name << " ;" << endl;
         }
     } else {
-        cout << "Undefined variable : '" << name << "'" << endl;
+        cout << "Undefined variable : '" << name << "'" << endl; // 理論上不會觸發這條路徑
     }
 }
 
@@ -2277,6 +2653,7 @@ int main() {
     // ios::sync_with_stdio(false);
     // cin.tie(0);
     cout << fixed << setprecision(3);
+    global_env->global_init();
     cout << "Our-C running ..." << endl;
 
     // ifstream file("test/data.txt"); // 檔案測試

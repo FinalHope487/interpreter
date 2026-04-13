@@ -11,3 +11,7 @@ is_float有點問題
 每個parse完最後都是分號
 
 id = val 會回傳 val 也會導致 id 被刷新為 val
+
+// expression 的值為最後一個basic expression的值
+
+還無法處理 cout << (cout << 1 << 2) 的情況

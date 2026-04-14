@@ -2,3 +2,8 @@
 .history
 *.exe
 *backup
+inputs
+outputs
+error_logs
+dummy.cpp
+.vscode/

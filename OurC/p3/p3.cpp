@@ -78,7 +78,6 @@ enum State {
     Definition, 
     NewDefinition, 
     Statement, 
-    Error 
 };
 
 typedef pair<string, State> StatePair;
@@ -643,6 +642,7 @@ struct Function {
     DataType return_type;
     vector<FunctionParam> params;
     vector<Token> tokens; // 全部的 token
+    bool has_void_param = false;
 };
 
 struct Environment {
@@ -710,7 +710,8 @@ const unordered_set<string> symbols = {
     ":", "&&", "||", "!",  "==", "!=", "<",
     ">", "<=", ">=", "<<", ">>", "+",  "-",
     "*", "/",  "%",  "(",  ")",  ",",  ";",
-    "[", "]",  "{",  "}",  "\"", 
+    "[", "]",  "{",  "}",  "\"", "&",  "|",
+    "^" 
 };
 
 const unordered_set<string> data_types = {
@@ -719,48 +720,15 @@ const unordered_set<string> data_types = {
 
 const unordered_set<string> keywords = ([]{
     unordered_set<string> combined = {
-        "true",
-        "false",
-        "if",
-        "else",
-        "do",
-        "while",
-        // "for",
-        "return",
-        "break",
+        "true", "false",
+        "if", "else",
+        "do", "while",
+        "return", "break",
         "continue"
     };
     combined.insert(data_types.begin(), data_types.end());
     return combined;
 }());
-
-// unexpected next token types
-// unordered_map<TokenType, vector<TokenType>> unexpected_types = {
-//     {TokenType::Number, {Sign, Assign, Ident, LParen}},
-//     {TokenType::Dot, {Sign, Assign, Ident, LParen, Dot}},
-//     {TokenType::Ident, {Sign}},
-//     {TokenType::Str, {Sign, Assign, Increment, Decrement, LParen}},
-//     {TokenType::Chr, {Sign, Assign, LParen}},
-//     {TokenType::Boolean, {Sign, Assign, Increment, Decrement, LParen}}, // 需要檢查
-//     {TokenType::Operator, {Operator, Assign, Increment, Decrement, Semicolon}},
-//     {TokenType::SignOperator, {Operator, Assign, Increment, Decrement, Semicolon}},
-//     {TokenType::Sign, {Operator, Assign, Increment, Decrement}},
-//     {TokenType::Assign, {Operator, Assign, Increment, Decrement}},
-//     {TokenType::Increment, {Operator, Assign, Increment, Decrement, LParen}},
-//     {TokenType::Decrement, {Operator, Assign, Increment, Decrement, LParen}},
-//     {TokenType::LParen, {Operator, Assign}},
-//     {TokenType::RParen, {Sign, Assign, Increment, Decrement}},
-//     {TokenType::LBracket, {Operator, Assign}},
-//     {TokenType::RBracket, {Sign}},
-//     {TokenType::LBrace, {Operator, Assign}},
-//     {TokenType::RBrace, {Sign, Assign, Increment, Decrement}},
-//     {TokenType::Comma, {Operator, Assign}},
-//     {TokenType::Ref, {Operator, Assign, Increment, Decrement}},
-//     {TokenType::Semicolon, {}},
-//     {TokenType::EndOfFile, {}},
-//     {TokenType::Null, {}},
-//     {TokenType::Undefined, {}},
-// };
 
 // ========================================Function Definition========================================
 // const string& 傳引用(保護正本) const string 傳值(會複製一份副本且保護副本)
@@ -777,23 +745,29 @@ bool is_in(const string &str, const unordered_map<string, Variable> &targets) {
 }
 
 Variable convert_to_var(const Token tk, int size = -1) {
-    // 根據 Variable 的設計 (假設 Variable 有 type: DataType 和 val: variant)
-    if (tk.type == TokenType::Number) {
-        if (tk.val.find('.') != string::npos) {
-            // 浮點數
-            return Variable{DataType::Float, size, tk.val};
+    if (tk.type == TokenType::Constant) {
+        if (tk.val == "true" || tk.val == "false") {
+            return Variable{DataType::Bool, size, tk.val};
+        } else if (tk.val.front() == '\'') {
+            // Char constant: 'a'
+            string content = "";
+            if (tk.val.size() >= 3) content = tk.val.substr(1, tk.val.size() - 2);
+            return Variable{DataType::Char, size, content};
+        } else if (tk.val.front() == '"') {
+            // String constant: "hello"
+            string content = "";
+            if (tk.val.size() >= 2) content = tk.val.substr(1, tk.val.size() - 2);
+            return Variable{DataType::String, size, content};
         } else {
-            // 整數
-            return Variable{DataType::Int, size, tk.val};
+            // Number constant: 35, 35.67, .35, 35.
+            if (tk.val.find('.') != string::npos) {
+                return Variable{DataType::Float, size, tk.val};
+            } else {
+                return Variable{DataType::Int, size, tk.val};
+            }
         }
-    } else if (tk.type == TokenType::Str) {
-        return Variable{DataType::String, size, tk.val};
-    } else if (tk.type == TokenType::Chr) {
-        return Variable{DataType::Char, size, tk.val};
-    } else if (tk.type == TokenType::Boolean) {
-        return Variable{DataType::Bool, size, tk.val};
     } else {
-        throw runtime_error("Error in convert_to_var()");
+        throw runtime_error("Error in convert_to_var(): " + tk.val + " is not a constant");
     }
 }
 
@@ -821,7 +795,7 @@ unordered_map<string, Variable> format_params(const vector<FunctionParam> &param
         {DataType::Float, {DataType::Int, DataType::Float}},
     };
     if (params.size() != args.size()) {
-        throw runtime_error("Invalid function call: expected " + to_string(params.size()) + " arguments, got " + to_string(args.size()));
+        // throw runtime_error("Invalid function call: expected " + to_string(params.size()) + " arguments, got " + to_string(args.size()));
     }
     for (int i = 0; i < (int)params.size(); i++) {
         Variable final_arg = args[i];
@@ -879,6 +853,7 @@ private:
 
     // 只要一個statement結束就是一個新的statement開始 包含空白 換行 註解等
     Token get_a_token(int skip_tokens = 1) {
+        if (skip_tokens < 1) skip_tokens = 1;
         if (from_tokens) {
             token_ptr += skip_tokens - 1;
             if (token_ptr < tokens_source.size()) {
@@ -888,6 +863,7 @@ private:
             }
             return {TokenType::EndOfFile, "", (int)tokens_source.size() > 0 ? tokens_source.back().line : 1};
         }
+
         Token tk;
         int skipped_newlines = 0;
         for (int i = 0; i < skip_tokens; i++) {
@@ -900,131 +876,82 @@ private:
                     }
                     idx++;
                 } else if (idx + 1 < text.length() && text[idx] == '/' && text[idx + 1] == '/') {
-                    while (idx < text.length() && text[idx] != '\n') {
-                        idx++;
-                    }
+                    while (idx < text.length() && text[idx] != '\n') idx++;
                     if (idx < text.length() && text[idx] == '\n') {
                         cur_line++;
                         skipped_newlines++;
                         idx++;
                     }
-                } else {
-                    break;
-                }
+                } else break;
             }
 
             last_token_start_idx = idx;
             if (idx >= text.length()) {
-                tk = {TokenType::EndOfFile, ""};
-                tk.line = cur_line;
+                tk = {TokenType::EndOfFile, "", cur_line};
                 last_skipped_newline_count = skipped_newlines;
                 return tk;
             }
+
             if (text[idx] == '\'') {
-                // 檢查是否符合 'c' 的格式，其餘情況皆為 unrecognized token (且不吃掉後續字元)
                 if (idx + 2 < text.length() && text[idx + 2] == '\'' && text[idx + 1] != '\n') {
-                    tk = {TokenType::Chr, string(1, text[idx + 1])};
+                    tk = {TokenType::Constant, text.substr(idx, 3)};
                     idx += 3;
                 } else {
-                    tk = {TokenType::Undefined, "'"};
+                    tk = {TokenType::Undefined, string(1, text[idx])};
                     idx++;
                 }
             } else if (text[idx] == '"') {
-                string str_str;
+                size_t start = idx;
                 idx++;
-                // double quote 必會閉合
-                while (text[idx] != '"') { 
-                    if (text[idx] == '\\') {
-                        str_str += '\\';
-                        idx++;
-                        if (idx < text.length()) {
-                            str_str += text[idx];
-                            idx++;
-                        }
-                    } else {
-                        str_str += text[idx];
-                        idx++;
-                    }
+                while (idx < text.length() && text[idx] != '"') {
+                    if (text[idx] == '\\' && idx + 1 < text.length()) idx++;
+                    idx++;
                 }
-                idx++;
-                tk = {TokenType::Str, str_str};
-            } else if (isdigit(text[idx]) || text[idx] == '.') {
-                string num_str;
-
+                if (idx < text.length()) idx++; // consume "
+                tk = {TokenType::Constant, text.substr(start, idx - start)};
+            } else if (isdigit(text[idx]) || (text[idx] == '.' && idx + 1 < text.length() && isdigit(text[idx+1]))) {
+                size_t start = idx;
+                bool has_dot = false;
                 if (text[idx] == '.') {
-                    tk = {TokenType::Dot, "."};
+                    has_dot = true;
                     idx++;
-                } else if (isdigit(text[idx])) {
-                    while (idx < text.length() && isdigit(text[idx])) {
-                        num_str += text[idx];
-                        idx++;
-                    }
-                    tk = {TokenType::Number, num_str};
                 }
-            } else if (text.compare(idx, 4, "true") == 0) {
-                idx += 4;
-                tk = {TokenType::Boolean, "true"};
-            } else if (text.compare(idx, 5, "false") == 0) {
-                idx += 5;
-                tk = {TokenType::Boolean, "false"};
+                while (idx < text.length() && isdigit(text[idx])) idx++;
+                if (!has_dot && idx < text.length() && text[idx] == '.') {
+                    idx++;
+                    while (idx < text.length() && isdigit(text[idx])) idx++;
+                }
+                tk = {TokenType::Constant, text.substr(start, idx - start)};
             } else if (isalpha(text[idx]) || text[idx] == '_') {
-                string ident_str;
-                while (idx < text.length() && (isalnum(text[idx]) || text[idx] == '_')) {
-                    ident_str += text[idx];
-                    idx++;
-                }
-                tk = {TokenType::Ident, ident_str};
-            } else {
-                if (idx + 1 < text.length()) {
-                    string s = string("") + text[idx] + text[idx + 1];
-
-                    if (s == "+=") {idx += 2; tk = {TokenType::Assign, "+="}; continue;}
-                    else if (s == "-=") {idx += 2; tk = {TokenType::Assign, "-="}; continue;}
-                    else if (s == "*=") {idx += 2; tk = {TokenType::Assign, "*="}; continue;}
-                    else if (s == "/=") {idx += 2; tk = {TokenType::Assign, "/="}; continue;}
-                    else if (s == "==") {idx += 2; tk = {TokenType::Operator, "=="}; continue;}
-                    else if (s == ">=") {idx += 2; tk = {TokenType::Operator, ">="}; continue;}
-                    else if (s == "<=") {idx += 2; tk = {TokenType::Operator, "<="}; continue;}
-                    else if (s == "!=") {idx += 2; tk = {TokenType::Operator, "!="}; continue;}
-                    else if (s == "&&") {idx += 2; tk = {TokenType::Operator, "&&"}; continue;}
-                    else if (s == "||") {idx += 2; tk = {TokenType::Operator, "||"}; continue;}
-                    else if (s == "++") {idx += 2; tk = {TokenType::Increment, "++"}; continue;}
-                    else if (s == "--") {idx += 2; tk = {TokenType::Decrement, "--"}; continue;}
-                    else if (s == "<<") {idx += 2; tk = {TokenType::IO, "<<"}; continue;}
-                    else if (s == ">>") {idx += 2; tk = {TokenType::IO, ">>"}; continue;}
-                }
-                if (idx < text.length()) {
-                    char c = text[idx];
-                    if (c == '+') {idx += 1; tk = {TokenType::SignOperator, "+"}; continue;}
-                    else if (c == '-') {idx += 1; tk = {TokenType::SignOperator, "-"}; continue;}
-                    else if (c == '*') {idx += 1; tk = {TokenType::Operator, "*"}; continue;}
-                    else if (c == '/') {idx += 1; tk = {TokenType::Operator, "/"}; continue;}
-                    else if (c == '=') {idx += 1; tk = {TokenType::Operator, "="}; continue;}
-                    else if (c == '>') {idx += 1; tk = {TokenType::Operator, ">"}; continue;}
-                    else if (c == '<') {idx += 1; tk = {TokenType::Operator, "<"}; continue;}
-                    else if (c == '!') {idx += 1; tk = {TokenType::Sign, "!"}; continue;}
-                    else if (c == '(') {idx += 1; tk = {TokenType::LParen, "("}; continue;}
-                    else if (c == ')') {idx += 1; tk = {TokenType::RParen, ")"}; continue;}
-                    else if (c == '[') {idx += 1; tk = {TokenType::LBracket, "["}; continue;}
-                    else if (c == ']') {idx += 1; tk = {TokenType::RBracket, "]"}; continue;}
-                    else if (c == '{') {idx += 1; tk = {TokenType::LBrace, "{"}; continue;}
-                    else if (c == '}') {idx += 1; tk = {TokenType::RBrace, "}"}; continue;}
-                    else if (c == ',') {idx += 1; tk = {TokenType::Comma, ","}; continue;}
-                    else if (c == '?') {idx += 1; tk = {TokenType::Operator, "?"}; continue;}
-                    else if (c == ':') {idx += 1; tk = {TokenType::Operator, ":"}; continue;}
-                    else if (c == '%') {idx += 1; tk = {TokenType::Operator, "%"}; continue;}
-                    else if (c == '&') {idx += 1; tk = {TokenType::Operator, "&"}; continue;}
-                    else if (c == '|') {idx += 1; tk = {TokenType::Operator, "|"}; continue;}
-                    else if (c == '^') {idx += 1; tk = {TokenType::Operator, "^"}; continue;}
-                    else if (c == ';') {idx += 1; tk = {TokenType::Semicolon, ";"}; continue;}
-                    else {idx += 1; tk = {TokenType::Undefined, string("") + c}; continue;}
+                size_t start = idx;
+                while (idx < text.length() && (isalnum(text[idx]) || text[idx] == '_')) idx++;
+                string s = text.substr(start, idx - start);
+                if (s == "true" || s == "false") {
+                    tk = {TokenType::Constant, s};
                 } else {
-                    string s;
-                    while (!strchr("+-*/><()[]{}=", text[idx])) {
-                        s += text[idx];
-                        idx++;
+                    tk = {TokenType::Identifier, s};
+                }
+            } else {
+                bool found_two = false;
+                if (idx + 1 < text.length()) {
+                    string s2 = text.substr(idx, 2);
+                    static const unordered_set<string> s2_syms = {
+                        "+=", "-=", "*=", "/=", "%=", "==", ">=", "<=", "!=", "&&", "||", "++", "--", "<<", ">>"
+                    };
+                    if (s2_syms.count(s2)) {
+                        tk = {TokenType::Symbol, s2};
+                        idx += 2;
+                        found_two = true;
                     }
-                    tk = {TokenType::Undefined, s};
+                }
+                if (!found_two) {
+                    string s1 = string(1, text[idx]);
+                    if (symbols.count(s1)) {
+                        tk = {TokenType::Symbol, s1};
+                    } else {
+                        tk = {TokenType::Undefined, s1};
+                    }
+                    idx++;
                 }
             }
         }
@@ -1201,7 +1128,7 @@ public:
                     
                     // 特殊處理函數呼叫的情況：例如 AddTwo(x) 的 '(' 前面不加空格
                     if ((tk.val == "(" || tk.val == "[" || tk.val == "++" || tk.val == "--") && 
-                        prev_type == TokenType::Ident) {
+                        (tk.type == TokenType::Identifier || prev_type == TokenType::Identifier)) {
                         // 排除 if, while, for 等關鍵字的例外，例如 if (x > 0)
                         if (tk.val == "(") {
                             if (prev_val != "if" && prev_val != "while" && prev_val != "for") {
@@ -1210,7 +1137,8 @@ public:
                         } else {
                             need_space = false;
                         }
-                    } else if (tk.type == TokenType::Ident && (prev_val == "++" || prev_val == "--")) {
+                    } else if (tk.type == TokenType::Identifier && (prev_val == "++" || prev_val == "--") ||
+                               prev_val == "(" && tk.val == ")") {
                         need_space = false;
                     }
                     if (need_space) result += " ";
@@ -1282,7 +1210,7 @@ private:
     void throw_error(int debug_No = 0) {
         // return "unrecognize token with first char" and "unexpected token"
         if (DEBUG) cout << "Debug mode: No. " << debug_No << endl;
-        if (cur_token.type != TokenType::Ident && !is_in(string("") + cur_token.val[0], symbols)) {
+        if (cur_token.type != TokenType::Identifier && !is_in(string("") + cur_token.val[0], symbols)) {
             throw runtime_error("Line " + to_string(cur_token.line) + " : unrecognized token with first char : '" + cur_token.val[0] + "'");
         } else {
             throw runtime_error("Line " + to_string(cur_token.line) + " : unexpected token : '" + cur_token.val + "'");
@@ -1345,7 +1273,7 @@ private:
         } else {
             Variable* target_var = cur_env->get(id_token.val);
             if (target_var == nullptr) {
-                if (cur_token.type == TokenType::Ident) throw_undefined_id_error(id_token, 2);
+                if (cur_token.type == TokenType::Identifier) throw_undefined_id_error(id_token, 2);
                 else throw_error(2);
             }
             next(); // 消耗 ident
@@ -1414,7 +1342,7 @@ private:
             next(); // 消耗 ++/--
             
             // 語法規範：前置 ++/-- 後面必須接一個 Ident 或 Array Element (L-value)
-            if (cur_token.type != TokenType::Ident) throw_error(36);
+            if (cur_token.type != TokenType::Identifier) throw_error(36);
             
             Token id_token = cur_token;
             // 這裡暫時不支持對陣列元素進行前置 ++/-- (看語法要求，若需支持則調用 lvalue 解析)
@@ -1429,30 +1357,11 @@ private:
         }
 
         // num 1, 1., .1, 1.0
-        if (cur_token.type == TokenType::Number) {
-            auto num_tk = cur_token;
-            if (lexer.peek_token().val == ".") {
-                next(); // get number
-                next(); // get "."
-                num_tk.val += cur_token.val;
-                if (lexer.peek_token().type == TokenType::Number) {
-                    next(); // get digits after dot
-                    num_tk.val += cur_token.val;
-                }
-            }
-            result = convert_to_var(num_tk, -1);
-            next();
-        } else if (cur_token.type == TokenType::Dot) {
-            auto num_tk = cur_token; // "."
-            Token next_token = lexer.peek_token();
-            if (next_token.type == TokenType::Number) {
-                next(); // get digits after dot
-                num_tk.val += cur_token.val;
-            }
-            result = convert_to_var(num_tk, -1);
+        if (cur_token.type == TokenType::Constant) {
+            result = convert_to_var(cur_token, -1);
             next();
         // ident or function call
-        } else if (cur_token.type == TokenType::Ident) {
+        } else if (cur_token.type == TokenType::Identifier) {
             Token id_token = cur_token;
             if (cur_token.val == "cin" || cur_token.val == "cout") {
                 next();
@@ -1480,15 +1389,6 @@ private:
                     }
                 }
             }
-        } else if (cur_token.type == TokenType::Chr) {
-            result = Variable{DataType::Char, -1, cur_token.val};
-            next();
-        } else if (cur_token.type == TokenType::Str) {
-            result = Variable{DataType::String, -1, cur_token.val};
-            next();
-        } else if (cur_token.type == TokenType::Boolean) {
-            result = Variable{DataType::Bool, -1, cur_token.val};
-            next();
         } else {
             throw_error(8);
         }
@@ -1542,7 +1442,7 @@ private:
                     next();
                     Variable out = parse_expression();
                     // cout << "test | out.type: " << enum_to_DataType(out.type) << endl;
-                    // cout << var_to_string(out) << endl;
+                    cout << var_to_string(out);
                     result = out;
                 }
             } else if (sp && sp->val == "cin" && cur_token.val == ">>") {
@@ -1686,7 +1586,7 @@ private:
         //                 | ConditionalExpression
         bool is_assign = false;
         // TODO: 改掉此處邏輯
-        if (cur_token.type == TokenType::Ident) {
+        if (cur_token.type == TokenType::Identifier) {
             Token next_token = lexer.peek_token(1);
             if (is_in(next_token.val, {"=", "+=", "-=", "*=", "/=", "%="})) {
                 is_assign = true;
@@ -1695,7 +1595,7 @@ private:
                 int b_count = 1;
                 while (b_count > 0) {
                     Token t = lexer.peek_token(i++);
-                    if (t.type == TokenType::EndOfFile || t.type == TokenType::Semicolon) break;
+                    if (t.type == TokenType::EndOfFile || t.val == ";") break;
                     if (t.val == "[") b_count++;
                     else if (t.val == "]") b_count--;
                 }
@@ -2072,7 +1972,8 @@ private:
         return state_pairs;
     }
 
-    vector<FunctionParam> parse_function_declaration_params() {
+    vector<FunctionParam> parse_function_declaration_params(bool &has_void) {
+        has_void = false;
         // start at "(", end after ")"
         // <Params> ::= ( <Type> <Ident> { , <Type> <Ident> } | <Empty> | <VOID> )
         vector<FunctionParam> params;
@@ -2085,7 +1986,7 @@ private:
                 is_ref = true;
                 next();
             }
-            if (cur_token.type == TokenType::Ident && keywords.find(cur_token.val) == keywords.end()) {
+            if (cur_token.type == TokenType::Identifier && keywords.find(cur_token.val) == keywords.end()) {
                 Token id_token = cur_token;
                 next();
                 if (cur_token.val == "[") {
@@ -2106,24 +2007,31 @@ private:
                 throw_error(27);
             }
         };
-        if (cur_token.val == "(") {
-            // () and (void)
-            if (lexer.peek_token().val == ")") {
-                next(); // 走到 )
-            } else if (lexer.peek_token().val == "void" && lexer.peek_token(2).val == ")") {
-                next(); // 走到 void
-                next(); // 走到 )
-            } else {
-                next();
-                parse_a_param();
-                while (cur_token.val == ",") {
-                    next();
-                    parse_a_param();
+
+        if (cur_token.val == "(") { 
+            next(); // move past "("
+            if (cur_token.val == ")") return params; // () case
+
+            if (cur_token.val == "void") {
+                if (lexer.peek_token().val == ")") {
+                    next(); // move to )
+                    has_void = true;
+                    return params; // (void) case
+                } else {
+                    throw_error(87);
                 }
-                if (cur_token.val != ")") {
+            }
+
+            // Normal parameters
+            while (true) {
+                parse_a_param();
+                if (cur_token.val == ",") {
+                    next();
+                } else if (cur_token.val == ")") {
+                    break;
+                } else {
                     throw_error(28);
                 }
-                // next(); // 消耗 ) 為了保留 '{' 在原位給 get_a_block
             }
         } else {
             throw_error(29);
@@ -2141,7 +2049,8 @@ private:
         if (func_table.find(name) != func_table.end()) state = State::NewDefinition;
         next(); // move to "("
 
-        vector<FunctionParam> params = parse_function_declaration_params();
+        bool has_void = false;
+        vector<FunctionParam> params = parse_function_declaration_params(has_void);
         
         // 宣告時先行驗證語法 (dry run)，同時檢查未定義變數
         bool old_dry_run = dry_run;
@@ -2200,7 +2109,7 @@ private:
         vector<Token> tokens = lexer.get_a_block();
         cur_token = lexer.get_next_token(); // 同步下一顆 token
         
-        func_table[name] = Function{type, params, tokens};
+        func_table[name] = Function{type, params, tokens, has_void};
         return {name + "()", state}; // 輸入至註冊表時不需顯示參數
     }
 
@@ -2313,10 +2222,10 @@ private:
 
         // 條件 1: Function Definition / Variable Declaration (非純 Statement 標準文法，但為 Global Scope 宣告入口)
         Token type_token = cur_token;
-        if (type_token.type == TokenType::Ident && type_map.find(type_token.val) != type_map.end()) {    
+        if (type_token.type == TokenType::Identifier && type_map.find(type_token.val) != type_map.end()) {    
             if (!is_global && type_token.val == "void") throw_error(41); // DataType only, VOID only global function
             next(); // 現在在ident
-            if (cur_token.type != TokenType::Ident) throw_error(33);
+            if (cur_token.type != TokenType::Identifier) throw_error(33);
             if (lexer.peek_token().val == "(") {
                 if (!is_global) throw_error(42); // FunctionDefinition only in GlobalDefinition
                 // 實作: Function Declaration 以Ident進入function / type ident "("
@@ -2365,7 +2274,7 @@ private:
             return_states.push({"", State::Statement});
             return return_states;
         // 條件 7: ';' (Empty Statement)
-        } else if (cur_token.type == TokenType::Semicolon) {
+        } else if (cur_token.val == ";") {
             return_states.push({"", State::Statement});
             require_semicolon = true; // 由底下的掃描邏輯來消耗這個 ';'
         // 條件 8: Expression ';'
@@ -2376,9 +2285,9 @@ private:
         }
 
         // 後處理：分號檢測與狀態更新 TODO: 找出這裡的問題
-        if (require_semicolon && cur_token.type != TokenType::Semicolon) {
+        if (require_semicolon && cur_token.val != ";") {
             throw_error(34);
-        } else if (require_semicolon && cur_token.type == TokenType::Semicolon) {
+        } else if (require_semicolon && cur_token.val == ";") {
             if (reset_after_statement) {
                 prev_token = cur_token;
                 cur_token = lexer.get_next_token();
@@ -2510,18 +2419,24 @@ void ListFunction(const vector<Variable> &functions) {
         format_params(builtin_func_table["ListFunction"].params, functions)["name"]);
     if (func_table.find(name) != func_table.end()) {
         Function f = func_table.at(name);
-        cout << enum_to_DataType(f.return_type) << " " << name << "( ";
-        for (int i = 0; i < (int)f.params.size(); i++) {
-            cout << enum_to_DataType(f.params[i].type) << " ";
-            if (f.params[i].is_ref) cout << "& ";
-            cout << f.params[i].name;
-            if (f.params[i].size != -1) cout << "[ " << f.params[i].size << " ]";
-            if (i < (int)f.params.size() - 1) {
-                cout << ", ";
+        cout << enum_to_DataType(f.return_type) << " " << name << "(";
+        if (f.params.empty()) {
+            if (f.has_void_param) cout << " void ";
+        } else {
+            cout << " ";
+            for (int i = 0; i < (int)f.params.size(); i++) {
+                cout << enum_to_DataType(f.params[i].type) << " ";
+                if (f.params[i].is_ref) cout << "& ";
+                cout << f.params[i].name;
+                if (f.params[i].size != -1) cout << "[ " << f.params[i].size << " ]";
+                if (i < (int)f.params.size() - 1) {
+                    cout << ", ";
+                }
             }
+            cout << " ";
         }
         Lexer lexer("");
-        cout << " ) " << lexer.pretty_print_block(f.tokens) << endl;
+        cout << ") " << lexer.pretty_print_block(f.tokens) << endl;
     } else {
         cout << "Undefined function : '" << name << "'" << endl;
     }

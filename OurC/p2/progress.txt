@@ -8,9 +8,9 @@ q6 2/3 WA
 q7 4/4 
 q8 3/4 WA (有AC過)
 q9 3/4 WA
-q10 4/4
+q10 3/4 WA (有AC過)
 
 q11 3/4 WA
-q12 2/4 WA
-q13 2/4 WA
-q14 2/4 WA
+q12 3/4 WA
+q13 3/4 WA
+q14 3/4 WA

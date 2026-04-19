@@ -7,6 +7,6 @@ q6 AC
 q7 AC
 q8 AC
 q9 AC
-q10 0/3 WA
-q11 
-q12 
+q10 AC
+q11 AC
+q12 AC

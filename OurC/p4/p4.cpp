@@ -1966,6 +1966,9 @@ private:
         bool has_void = false;
         vector<FunctionParam> params = parse_function_declaration_params(has_void);
         
+        // 1. 在輸入函數定義時先將函數名稱跟參數表填入function table中 (允許遞迴呼叫)
+        func_table[name] = Function{type, params, {}, has_void};
+
         // 宣告時先行驗證語法 (dry run)，同時檢查未定義變數
         bool old_dry_run = dry_run;
         dry_run = true;
@@ -1986,39 +1989,48 @@ private:
         is_global = false;
 
         try {
-            next(); // 消耗 ')'，載入 '{'
-            if (cur_token.val != "{") {
-                throw_error(40); // 應該要是 '{'
+            try {
+                next(); // 消耗 ')'，載入 '{'
+                if (cur_token.val != "{") {
+                    throw_error(40); // 應該要是 '{'
+                }
+                next(); // 進到 '{' 裡面
+                while (cur_token.val != "}") {
+                    parse_statement(false);
+                }
+                next(); // 離開 '}'
+            } catch (ReturnException &re) {
+                // 文法正確 捕捉return避免錯誤
             }
-            next(); // 進到 '{' 裡面
-            while (cur_token.val != "}") {
-                parse_statement(false);
-            }
-            next(); // 離開 '}'
-        } catch (ReturnException &re) {
-            // 文法正確 捕捉return避免錯誤
+            
+            is_global = old_is_global;
+            dry_run = old_dry_run;
+            current_return_type = old_return_type;
+            cur_env = parent_env;
+            
+            // 將 lexer 退回大括號的起點
+            lexer.back_to_checkpoint();
+            lexer.pop_checkpoint();
+            
+            vector<Token> tokens = lexer.get_a_block();
+            cur_token = lexer.get_next_token(); // 同步下一顆 token
+            
+            // 2. 在成功解析完畢後再將內容填入
+            func_table[name].tokens = tokens;
+            return {name + "()", state}; 
+
         } catch (...) {
+            // 解析失敗，還原狀態
             is_global = old_is_global;
             dry_run = old_dry_run;
             current_return_type = old_return_type;
             cur_env = parent_env;
             lexer.pop_checkpoint(); 
+            
+            // 3. 若解析宣告內容過程發生錯誤則再從 table 中移除函數
+            func_table.erase(name);
             throw; 
         }
-        is_global = old_is_global;
-        dry_run = old_dry_run;
-        current_return_type = old_return_type;
-        cur_env = parent_env;
-        
-        // 將 lexer 退回大括號的起點
-        lexer.back_to_checkpoint();
-        lexer.pop_checkpoint();
-        
-        vector<Token> tokens = lexer.get_a_block();
-        cur_token = lexer.get_next_token(); // 同步下一顆 token
-        
-        func_table[name] = Function{type, params, tokens, has_void};
-        return {name + "()", state}; // 輸入至註冊表時不需顯示參數
     }
 
     // 同時回傳每個 arg 對應的外部變數位址（lvalue ptr），用於 Pass-by-Reference

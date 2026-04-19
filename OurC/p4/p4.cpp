@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <cassert>
 #include <cctype>
 #include <cmath>
@@ -600,7 +601,7 @@ const unordered_set<string> keywords = ([]{
 }());
 
 // ========================================Function Definition========================================
-// const string& 傳引用(保護正本) const string 傳值(會複製一份副本且保護副本)
+
 bool is_in(const string &str, const unordered_set<string> &targets) { return targets.find(str) != targets.end(); }
 bool is_in(const string &str, const unordered_map<string, Function> &targets) { return targets.find(str) != targets.end(); }
 bool is_in(const string &str, const unordered_map<string, Variable> &targets) { return targets.find(str) != targets.end(); }
@@ -1101,14 +1102,10 @@ private:
     int recursion_depth = 0; // 遞迴深度（暫時設為一級，需要實作到function calling）
     DataType current_return_type = DataType::Void; 
 
-    bool dry_run = false; // <-- 關鍵點：跳過賦值動作
+    bool dry_run = false; // 啟用時不處理對變數的定義、賦值及修改(如i++)，僅檢查語法
     bool is_global = true;
-/* 
-    [修改] ❌void parse_function_call()
-           // 修改：呼叫時的引數傳遞，需相容陣列與參照型態的傳遞。
-*/
+    
     void throw_error(int debug_No = 0) {
-        // return "unrecognize token with first char" and "unexpected token"
         if (DEBUG) cout << "Debug mode: No. " << debug_No << endl;
         if (cur_token.type == TokenType::Undefined && !is_in(string("") + cur_token.val[0], symbols)) {
             throw runtime_error("Line " + to_string(cur_token.line) + " : unrecognized token with first char '" + cur_token.val[0] + "'");
@@ -1168,7 +1165,6 @@ private:
 
     // parse_ident_rvalue 傳入 lval_ptr 用於獲取變數位址，以便後續處理 ++/-- 等 Side Effect
     Variable parse_ident_rvalue(Variable** lval_ptr = nullptr) {
-        // 
         Token id_token = cur_token;
         if (lexer.peek_token().val == "(") {
             return parse_function_call();
@@ -1200,7 +1196,7 @@ private:
                     
                     if (idx >= 0 && idx < (*arr_ptr)->size()) {
                         result = (**arr_ptr)[idx];
-                        if (lval_ptr) *lval_ptr = &((**arr_ptr)[idx]); // 紀錄陣列元素的具體位址，而非整個陣列
+                        if (lval_ptr) *lval_ptr = &((**arr_ptr)[idx]); // 紀錄陣列元素的具體位址，而非整個陣列 (用以處理++/--等操作)
                     } else {
                         // throw runtime_error("Line " + to_string(id_token.line) + " : array index out of bounds");
                     }
@@ -1229,7 +1225,7 @@ private:
                 throw_error(4);
             }
         }
-        // sign TODO: 這裡有問題 考慮移除result都改為 return
+
         if (is_in(cur_token.val, {"+", "-", "!"})) {
             if (cur_token.val == "+") {
                 next();
@@ -1253,7 +1249,7 @@ private:
                 else *target_var = coerce_variable(*target_var - Variable{(int64)1}, target_var->type);
             }
             
-            return target_var ? *target_var : Variable();
+            return target_var ? *target_var : Variable(); // TODO: 需做修改
         }
 
         // num 1, 1., .1, 1.0
@@ -1267,7 +1263,7 @@ private:
                 next();
                 return Variable{DataType::Special, -1, id_token.val};
             }
-            // 若為關鍵字意味著必然不是變數等 應跳至parse statement被捕捉
+            // 若為關鍵字意味著必然不是變數 應跳至parse statement被捕捉
             if (is_in(cur_token.val, keywords)) throw_error(37);
             
             if (lexer.peek_token().val == "(") {
@@ -1434,7 +1430,7 @@ private:
                 if (!bool(result)) {
                     set_dry_run(true);
                     true_val = parse_basic_exp(); 
-                    set_dry_run(prev_dry_run); // 嚴格還原，而非設為 false
+                    set_dry_run(prev_dry_run);
                 } else {
                     true_val = parse_basic_exp(); 
                 }
@@ -1465,7 +1461,7 @@ private:
         // BasicExpression : Identifier [ '[' Expression ']' ] AssignmentOperator BasicExpression 
         //                 | ConditionalExpression
         bool is_assign = false;
-        // TODO: 改掉此處邏輯
+        // TODO: 此處預讀 token 邏輯較沒效率 需要修改
         if (cur_token.type == TokenType::Identifier) {
             Token next_token = lexer.peek_token(1);
             if (is_in(next_token.val, {"=", "+=", "-=", "*=", "/=", "%="})) {
@@ -1474,7 +1470,7 @@ private:
                 int i = 2;
                 int b_count = 1;
                 while (b_count > 0) {
-                    Token t = lexer.peek_token(i++); // TODO: 需要修改
+                    Token t = lexer.peek_token(i++);
                     if (t.type == TokenType::EndOfFile || t.val == ";") break;
                     if (t.val == "[") b_count++;
                     else if (t.val == "]") b_count--;
@@ -1531,7 +1527,6 @@ private:
             }
             next();
             Variable result = parse_expression();
-            if (DEBUG && cur_token.val == ")") cout << "Debug condition: " << cur_token.val << " " << lexer.peek_token().val << endl; 
             if (cur_token.val != ")") {
                 throw_error(11);
             }
@@ -2152,7 +2147,7 @@ private:
                 }
             }
             current_return_type = old_return_type;
-            // 函數輸出可以不用依照宣告型別
+            // 函數輸出在規範中不用依照宣告型別
             if (func_table[function_name].return_type == DataType::Void) return Variable();
             return Variable(func_table[function_name].return_type);
         } else {
@@ -2165,7 +2160,6 @@ private:
         // <Return> ::= "return" [ <BoolExpression> | <Expression> ] ";"
         next();
         Variable value;
-        // 處理回傳型態
         if (cur_token.val != ";") value = parse_expression();
         if (cur_token.val != ";") throw_error(32);
         next();

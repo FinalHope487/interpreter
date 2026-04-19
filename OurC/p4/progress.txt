@@ -1,0 +1,12 @@
+q1 AC
+q2 AC
+q3 AC
+q4 AC
+q5 AC
+q6 AC
+q7 AC
+q8 AC
+q9 AC
+q10 0/3 WA
+q11 
+q12 

@@ -1585,8 +1585,7 @@ private:
         // BasicExpression : Identifier [ '[' Expression ']' ] AssignmentOperator BasicExpression 
         //                 | ConditionalExpression
         bool is_assign = false;
-        // TODO: 改掉此處邏輯
-        if (cur_token.type == TokenType::Identifier) {
+        if (cur_token.type == TokenType::Identifier && keywords.find(cur_token.val) == keywords.end()) {
             Token next_token = lexer.peek_token(1);
             if (is_in(next_token.val, {"=", "+=", "-=", "*=", "/=", "%="})) {
                 is_assign = true;
@@ -1929,8 +1928,9 @@ private:
             if (keywords.find(cur_token.val) != keywords.end() || is_in(cur_token.val, symbols)) {
                 throw_error(21);
             }
-            State cur_state = State::Definition;
+            if (cur_token.type != TokenType::Identifier) throw_error(22);
             Token id_token = cur_token;
+            State cur_state = State::Definition;
             if (cur_env->get(id_token.val) != nullptr) {
                 cur_state = State::NewDefinition;
             }

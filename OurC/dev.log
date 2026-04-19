@@ -14,4 +14,36 @@ id = val 會回傳 val 也會導致 id 被刷新為 val
 
 // expression 的值為最後一個basic expression的值
 
-還無法處理 cout << (cout << 1 << 2) 的情況
+函數傳值流程
+
+1. 統一解析階段 (parse_function_params_with_ptrs)
+無論函數定義如何，解析器在呼叫端會先掃描所有的引數（Arguments），並回傳兩個並行（Parallel）的 Vector（也就是你提到的 Table）：
+
+arg_values (Value Vector)：儲存所有參數求值後的結果（R-value）。
+arg_ptrs (Pointer Vector)：
+如果引數是左值（L-value），例如 gY 或 a[1]，則儲存它在記憶體中的實際位址（Variable*）。
+如果引數是右值（R-value），例如 10 或 a+1，則儲存 nullptr。
+補全細節： 這裡使用了 回溯偵測（Peeking/Checkpoint）。在解析每個參數前，它會先「偷看」後面的 Token（如 [ 或 ,），判斷這是否為一個可以取位址的變數，如果是，才去取得指標。
+
+2. 環境初始化階段 (parse_function_block)
+進入函數時，會建立一個全新的 Environment，並根據函數定義的參數清單（f_params）來決定如何填入變數：
+
+當 is_ref == true (Pass-by-Reference)：
+檢查對應位置的 arg_ptrs 是否有有效指標。
+使用 declare_ref：這不會建立新的 Variable 物件，而是讓函數內的參數名稱直接指向呼叫方的記憶體。
+當 is_ref == false (Pass-by-Value)：
+使用 declare：在函數環境中建立一個全新的副本。
+補全細節（自動轉型 Coercion）：如果是傳值，直譯器會額外檢查型別。例如參數要求 int 但你傳入 float，它會呼叫 coerce_variable 進行強制轉型。引用參數則通常要求型別必須完全匹配。
+3. 靜態作用域與生命週期 (Scope & Lifetime)
+除了你提到的宣告模式，還有兩個關鍵細節：
+
+靜態作用域（Static Scoping）：新建立的函數環境，其 parent 指向的是 global_env（全域環境），而不是呼叫者的環境。這保證了函數內不能隨便存取呼叫者的局部變數。
+環境恢復：使用 saved_env 保存當前環境，並在函數執行完畢（不論是正常結束或透過 throw ReturnException）後，將 cur_env 重新指回呼叫者，確保執行流正確返回。
+總結你的描述補全：
+你的描述正確捕捉了**「先解析 Arg 屬性、後決定宣告模式」**的解耦設計。補全的部分在於：
+
+左值偵測：解析時需判斷引數是否具備「位址屬性」。
+型別處理：傳值有轉型邏輯，傳引用則直接綁定指標。
+錯誤阻斷：如你剛修改的，現在若 is_ref 匹配到 nullptr 會直接拋出語義錯誤。
+
+p4-4-3錯在引用外部變數方式不當(執行完才同步變數而不是將變數指標指向傳入的變數)

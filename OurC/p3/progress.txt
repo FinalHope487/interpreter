@@ -12,5 +12,5 @@ q11 AC
 q12 AC
 q13 AC
 q14 AC
-q15 0/3 WA (error handling)
-q16 0/3 
+q15 AC
+q16 AC

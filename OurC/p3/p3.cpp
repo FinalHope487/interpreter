@@ -1,11 +1,10 @@
+#include <cassert>
 #include <cctype>
 #include <cmath>
 #include <cstddef>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
-#include <fstream>
-#include <functional>
 #include <iomanip>
 #include <iostream>
 #include <memory>
@@ -18,6 +17,7 @@
 #include <vector>
 
 using namespace std;
+using int64 = long long;
 
 bool DEBUG = false;
 
@@ -28,8 +28,7 @@ template <class... Ts> overloaded(Ts...) -> overloaded<Ts...>;
 
 // ========================================definition========================================
 
-const string WHITESPACE = " \t\r";
-const double ErrorValue = 1e-4;
+const double ErrorValue = 1e-9;
 
 struct Token;
 struct Variable;
@@ -57,27 +56,15 @@ void ListFunction(const vector<Variable> &functions); // the definition of a par
 void Done(); // exit the interpreter
 
 enum TokenType {
-    Identifier,
-    Constant,
-    Symbol,
-    EndOfFile,
-    Undefined,
+    Identifier, Constant, Symbol, EndOfFile, Undefined,
 };
 
 enum DataType {
-    Int,
-    Float,
-    Char,
-    String,
-    Bool,
-    Special,
-    Void,
+    Int, Float, Char, String, Bool, Special, Void,
 };
 
 enum State { 
-    Definition, 
-    NewDefinition, 
-    Statement, 
+    Definition, NewDefinition, Statement, 
 };
 
 typedef pair<string, State> StatePair;
@@ -105,15 +92,6 @@ public:
     }
 };
 
-string enum_to_TokenType(int type) {
-    if (type == TokenType::Identifier) return "Identifier";
-    if (type == TokenType::Constant) return "Constant";
-    if (type == TokenType::Symbol) return "Symbol";
-    if (type == TokenType::EndOfFile) return "EOF";
-    if (type == TokenType::Undefined) return "Undefined";
-    return "Void";
-}
-
 string enum_to_DataType(int type) {
     if (type == DataType::Int) return "int";
     if (type == DataType::Float) return "float";
@@ -139,6 +117,7 @@ struct Token {
     TokenType type;
     string val;
     int line = 1;
+    int start_idx = 0;
 };
 
 // 定義special型別存放cin cout
@@ -154,27 +133,27 @@ struct Variable {
     DataType type;
     // 直接儲存原生型別，並利用 shared_ptr 來管理大型或遞迴結構的記憶體
     // const auto 型別代表未支援 會引發錯誤的型別
-    variant<monostate, int, double, bool, char, string, SpecialType,
+    variant<monostate, int64, double, bool, char, string, SpecialType,
             shared_ptr<ArrayType>, shared_ptr<ObjectType>> val;
-    int size = -1; // size = -1 not array
+    int64 size = -1; // size = -1 not array
 
     // { val } 對應型別數值建構子 留空為 Null 型別 用以直接轉換
     Variable() : val(monostate{}) { update_type(); }
-    Variable(int v) : val(v) { update_type(); }
+    Variable(int64 v) : val(v) { update_type(); }
     Variable(double v) : val(v) { update_type(); }
     Variable(bool v) : val(v) { update_type(); }
     Variable(char v) : val(v) { update_type(); }
     Variable(const string &v) : val(v) { update_type(); }
     Variable(const char *v) : val(string(v)) { update_type(); }
     Variable(shared_ptr<ArrayType> v) : val(v) { update_type(); }
-    Variable(shared_ptr<ObjectType> v) : val(v) { update_type(); } // 未實作的處理自訂資料型態
+    Variable(shared_ptr<ObjectType> v) : val(v) { update_type(); } // TODO: 未實作的處理自訂資料型態
 
     // { DataType, size } 用以初始化變數和 Array
-    Variable(DataType t, int size = -1, const string &v = "") : type(t), size(size) {
+    Variable(DataType t, int64 size = -1, const string &v = "") : type(t), size(size) {
         if (size != -1) {
             val = make_shared<ArrayType>(size, Variable(t));
         } else {
-            if (t == DataType::Int) val = stoi(v.empty() ? "0" : v);
+            if (t == DataType::Int) val = stoll(v.empty() ? "0" : v);
             else if (t == DataType::Float) val = stod(v.empty() ? "0.0" : v);
             else if (t == DataType::Bool) val = (v == "true");
             else if (t == DataType::Char) val = v.empty() ? '\0' : v[0];
@@ -186,7 +165,7 @@ struct Variable {
     }
 
     void update_type() {
-        if (holds_alternative<int>(val)) type = DataType::Int;
+        if (holds_alternative<int64>(val)) type = DataType::Int;
         else if (holds_alternative<double>(val)) type = DataType::Float;
         else if (holds_alternative<bool>(val)) type = DataType::Bool;
         else if (holds_alternative<char>(val)) type = DataType::Char;
@@ -206,7 +185,7 @@ struct Variable {
     }
 
     static Variable zeroed(DataType t) {
-        if (t == DataType::Int) return Variable(0);
+        if (t == DataType::Int) return Variable((int64)0);
         if (t == DataType::Float) return Variable(0.0);
         if (t == DataType::Char) return Variable('\0');
         if (t == DataType::String) return Variable(string(""));
@@ -221,19 +200,19 @@ private:
             [](const auto &a, const auto &b) {
                 auto is_numeric = [](const auto &v) {
                     using T = decay_t<decltype(v)>;
-                    return is_same_v<T, int> || is_same_v<T, double> ||
+                    return is_same_v<T, int64> || is_same_v<T, double> ||
                            is_same_v<T, char> || is_same_v<T, bool>;
                 };
                 return is_numeric(a) && is_numeric(b);
             }},
-            var1.val, var2.val);
+        var1.val, var2.val);
     }
 
     Variable bool_evaluate(const Variable &var1, const string &op, const Variable &var2) {
         auto extract_numeric_value = [](const Variable &v) -> double {
             return visit(overloaded{
                 [](double d) -> double { return d; },
-                [](int i) -> double { return static_cast<double>(i); },
+                [](int64 i) -> double { return static_cast<double>(i); },
                 [](char c) -> double { return static_cast<double>(c); },
                 [](bool b) -> double { return b ? 1.0 : 0.0; },
                 [](const auto &) -> double { return 0.0; }
@@ -268,7 +247,7 @@ private:
 public:
     explicit operator bool() const {
         return visit(overloaded{
-            [](int i) -> bool { return i != 0; },
+            [](int64 i) -> bool { return i != 0; },
             [](double d) -> bool { return d != 0.0; },
             [](bool b) -> bool { return b; },
             [](char c) -> bool { return c != '\0'; },
@@ -279,7 +258,7 @@ public:
 
     Variable operator+() {
         return visit(overloaded{
-            [](int i) -> Variable { return Variable(i); },
+            [](int64 i) -> Variable { return Variable(i); },
             [](double d) -> Variable { return Variable(d); },
             [&](const auto &) -> Variable { return zeroed(this->type); }
         }, this->val);
@@ -287,7 +266,7 @@ public:
 
     Variable operator-() {
         return visit(overloaded{
-            [](int i) -> Variable { return Variable(-i); },
+            [](int64 i) -> Variable { return Variable(-i); },
             [](double d) -> Variable { return Variable(-d); },
             [&](const auto &) -> Variable { return zeroed(this->type); }
         }, this->val);
@@ -306,10 +285,10 @@ public:
         }
 
         return visit(overloaded{
-            [](int a, int b) -> Variable { return Variable(a + b); },
+            [](int64 a, int64 b) -> Variable { return Variable(a + b); },
             [](double a, double b) -> Variable { return Variable(a + b); },
-            [](int a, double b) -> Variable { return Variable(a + b); },
-            [](double a, int b) -> Variable { return Variable(a + b); },
+            [](int64 a, double b) -> Variable { return Variable(a + b); },
+            [](double a, int64 b) -> Variable { return Variable(a + b); },
             [](const string &a, const string &b) -> Variable { return Variable(a + b); },
             [](const string &a, char b) -> Variable { return Variable(a + string(1, b)); },
             [](char a, const string &b) -> Variable { return Variable(string(1, a) + b); },
@@ -335,39 +314,39 @@ public:
 
     Variable operator-(const Variable &var2) {
         return visit(overloaded{
-            [](int a, int b) -> Variable { return Variable(a - b); },
+            [](int64 a, int64 b) -> Variable { return Variable(a - b); },
             [](double a, double b) -> Variable { return Variable(a - b); },
-            [](int a, double b) -> Variable { return Variable(a - b); },
-            [](double a, int b) -> Variable { return Variable(a - b); },
+            [](int64 a, double b) -> Variable { return Variable(a - b); },
+            [](double a, int64 b) -> Variable { return Variable(a - b); },
             [&](const auto &, const auto &) -> Variable { return zeroed(promote(this->type, var2.type)); }
         }, this->val, var2.val);
     }
 
     Variable operator*(const Variable &var2) {
         return visit(overloaded{
-            [](int a, int b) -> Variable { return Variable(a * b); },
+            [](int64 a, int64 b) -> Variable { return Variable(a * b); },
             [](double a, double b) -> Variable { return Variable(a * b); },
-            [](int a, double b) -> Variable { return Variable(a * b); },
-            [](double a, int b) -> Variable { return Variable(a * b); },
+            [](int64 a, double b) -> Variable { return Variable(a * b); },
+            [](double a, int64 b) -> Variable { return Variable(a * b); },
             [&](const auto &, const auto &) -> Variable { return zeroed(promote(this->type, var2.type)); }
         }, this->val, var2.val);
     }
 
     Variable operator/(const Variable &var2) {
         return visit(overloaded{
-            [](int a, int b) -> Variable {
-                if (b == 0) return Variable(0);
+            [](int64 a, int64 b) -> Variable {
+                if (b == 0) return Variable((int64)0);
                 return Variable(a / b);
             },
             [](double a, double b) -> Variable {
                 if (b == 0.0) return Variable(0.0); // TODO: 暫時性的處理
                 return Variable(a / b);
             },
-            [](int a, double b) -> Variable {
+            [](int64 a, double b) -> Variable {
                 if (b == 0.0) return Variable(0.0);
                 return Variable(static_cast<double>(a) / b);
             },
-            [](double a, int b) -> Variable {
+            [](double a, int64 b) -> Variable {
                 if (b == 0) return Variable(0.0);
                 return Variable(a / static_cast<double>(b));
             },
@@ -377,8 +356,8 @@ public:
 
     Variable operator%(const Variable &var2) {
         return visit(overloaded{
-            [](int a, int b) -> Variable {
-                if (b == 0) return Variable(0);
+            [](int64 a, int64 b) -> Variable {
+                if (b == 0) return Variable((int64)0);
                 return Variable(a % b);
             },
             [&](const auto &, const auto &) -> Variable { return zeroed(promote(this->type, var2.type)); }
@@ -435,8 +414,8 @@ public:
 
     Variable operator<<(const Variable &var2) {
         return visit(overloaded{
-            [](int a, int b) -> Variable {
-                if (b < 0) return Variable(0);
+            [](int64 a, int64 b) -> Variable {
+                if (b < 0) return Variable((int64)0);
                 if (b == 0) return Variable(a);
                 return Variable(a << b);
             },
@@ -448,8 +427,8 @@ public:
 
     Variable operator>>(const Variable &var2) {
         return visit(overloaded{
-            [](int a, int b) -> Variable {
-                if (b < 0) return Variable(0);
+            [](int64 a, int64 b) -> Variable {
+                if (b < 0) return Variable((int64)0);
                 if (b == 0) return Variable(a);
                 return Variable(a >> b);
             },
@@ -466,36 +445,36 @@ public:
     }
 
     Variable operator&(const Variable &var2) {
-        auto extract_int = [](const Variable &v) -> int {
+        auto extract_int = [](const Variable &v) -> int64 {
             return visit(overloaded{
-                [](int i) { return i; },
-                [](bool b) { return b ? 1 : 0; },
-                [](char c) { return static_cast<int>(static_cast<unsigned char>(c)); },
-                [](const auto &) { return 0; }
+                [](int64 i) { return i; },
+                [](bool b) { return b ? 1LL : 0LL; },
+                [](char c) { return static_cast<int64>(static_cast<unsigned char>(c)); },
+                [](const auto &) { return 0LL; }
             }, v.val);
         };
         return Variable(extract_int(*this) & extract_int(var2));
     }
 
     Variable operator^(const Variable &var2) {
-        auto extract_int = [](const Variable &v) -> int {
+        auto extract_int = [](const Variable &v) -> int64 {
             return visit(overloaded{
-                [](int i) { return i; },
-                [](bool b) { return b ? 1 : 0; },
-                [](char c) { return static_cast<int>(static_cast<unsigned char>(c)); },
-                [](const auto &) { return 0; }
+                [](int64 i) { return i; },
+                [](bool b) { return b ? 1LL : 0LL; },
+                [](char c) { return static_cast<int64>(static_cast<unsigned char>(c)); },
+                [](const auto &) { return 0LL; }
             }, v.val);
         };
         return Variable(extract_int(*this) ^ extract_int(var2));
     }
 
     Variable operator|(const Variable &var2) {
-        auto extract_int = [](const Variable &v) -> int {
+        auto extract_int = [](const Variable &v) -> int64 {
             return visit(overloaded{
-                [](int i) { return i; },
-                [](bool b) { return b ? 1 : 0; },
-                [](char c) { return static_cast<int>(static_cast<unsigned char>(c)); },
-                [](const auto &) { return 0; }
+                [](int64 i) { return i; },
+                [](bool b) { return b ? 1LL : 0LL; },
+                [](char c) { return static_cast<int64>(static_cast<unsigned char>(c)); },
+                [](const auto &) { return 0LL; }
             }, v.val);
         };
         return Variable(extract_int(*this) | extract_int(var2));
@@ -515,7 +494,7 @@ struct ReturnException {
 struct FunctionParam {
     DataType type;
     string name;
-    int size = -1;
+    int64 size = -1;
     bool is_ref = false;
 };
 
@@ -530,7 +509,6 @@ struct Environment {
     unordered_map<string, Variable> ident_table;
     shared_ptr<Environment> parent;
 
-    // 建構子，方便直接指定外層環境
     Environment(shared_ptr<Environment> p = nullptr) : parent(p) {}
 
     void global_init() {
@@ -538,7 +516,7 @@ struct Environment {
         declare("cout", Variable{DataType::Special, -1, "cout"});
     }
 
-    // 尋找變數 (Lookup) - 由內而外找
+    // 由內而外尋找變數 
     // 回傳指標，這樣才能夠直接修改它的值
     Variable *get(const string &name) {
         if (ident_table.find(name) != ident_table.end()) {
@@ -558,7 +536,7 @@ struct Environment {
         return true;
     }
 
-    // 賦值更新 (Assignment) - 尋找現有變數並更新
+    // 尋找現有變數並更新
     bool set(const string &name, const Variable &val) {
         if (ident_table.find(name) != ident_table.end()) {
             ident_table[name] = val;
@@ -592,7 +570,7 @@ const unordered_set<string> symbols = {
     ">", "<=", ">=", "<<", ">>", "+",  "-",
     "*", "/",  "%",  "(",  ")",  ",",  ";",
     "[", "]",  "{",  "}",  "\"", "&",  "|",
-    "^" 
+    "^", // "."
 };
 
 const unordered_set<string> data_types = {
@@ -604,8 +582,8 @@ const unordered_set<string> keywords = ([]{
         "true", "false",
         "if", "else",
         "do", "while",
-        "return", "break",
-        "continue"
+        "return", 
+        // "break","continue"
     };
     combined.insert(data_types.begin(), data_types.end());
     return combined;
@@ -613,19 +591,11 @@ const unordered_set<string> keywords = ([]{
 
 // ========================================Function Definition========================================
 // const string& 傳引用(保護正本) const string 傳值(會複製一份副本且保護副本)
-bool is_in(const string &str, const unordered_set<string> &targets) {
-    return targets.find(str) != targets.end();
-}
+bool is_in(const string &str, const unordered_set<string> &targets) { return targets.find(str) != targets.end(); }
+bool is_in(const string &str, const unordered_map<string, Function> &targets) { return targets.find(str) != targets.end(); }
+bool is_in(const string &str, const unordered_map<string, Variable> &targets) { return targets.find(str) != targets.end(); }
 
-bool is_in(const string &str, const unordered_map<string, Function> &targets) {
-    return targets.find(str) != targets.end();
-}
-
-bool is_in(const string &str, const unordered_map<string, Variable> &targets) {
-    return targets.find(str) != targets.end();
-}
-
-Variable convert_to_var(const Token tk, int size = -1) {
+Variable convert_to_var(const Token tk, int64 size = -1) {
     if (tk.type == TokenType::Constant) {
         if (tk.val == "true" || tk.val == "false") {
             return Variable{DataType::Bool, size, tk.val};
@@ -654,7 +624,7 @@ Variable convert_to_var(const Token tk, int size = -1) {
 
 string var_to_string(const Variable &var) {
     return visit(overloaded{
-        [](int i) { return to_string(i); },
+        [](int64 i) { return to_string(i); },
         [](double d) {
             stringstream ss;
             ss << fixed << setprecision(3) << d;
@@ -674,15 +644,15 @@ Variable coerce_variable(const Variable &var, DataType target_type) {
     if (var.type == target_type) return var;
     if (target_type == DataType::Int) {
         return visit(overloaded{
-            [](int i) { return Variable(i); },
-            [](double d) { return Variable(static_cast<int>(d)); },
-            [](bool b) { return Variable(b ? 1 : 0); },
-            [](char c) { return Variable(static_cast<int>(c)); },
-            [](const auto&) { return Variable(0); }
+            [](int64 i) { return Variable(i); },
+            [](double d) { return Variable(static_cast<int64>(d)); },
+            [](bool b) { return Variable(b ? 1LL : 0LL); },
+            [](char c) { return Variable(static_cast<int64>(c)); },
+            [](const auto&) { return Variable((int64)0); }
         }, var.val);
     } else if (target_type == DataType::Float) {
         return visit(overloaded{
-            [](int i) { return Variable(static_cast<double>(i)); },
+            [](int64 i) { return Variable(static_cast<double>(i)); },
             [](double d) { return Variable(d); },
             [](bool b) { return Variable(b ? 1.0 : 0.0); },
             [](char c) { return Variable(static_cast<double>(c)); },
@@ -694,7 +664,7 @@ Variable coerce_variable(const Variable &var, DataType target_type) {
         return Variable(var_to_string(var));
     } else if (target_type == DataType::Char) {
         return visit(overloaded{
-            [](int i) { return Variable(static_cast<char>(i)); },
+            [](int64 i) { return Variable(static_cast<char>(i)); },
             [](double d) { return Variable(static_cast<char>(d)); },
             [](char c) { return Variable(c); },
             [](const auto&) { return Variable('\0'); }
@@ -728,9 +698,9 @@ unordered_map<string, Variable> format_params(const vector<FunctionParam> &param
 
             if (can_convert && params[i].size == -1 && args[i].size == -1) {
                 if (params[i].type == DataType::Int) {
-                    final_arg = Variable(static_cast<int>(get<double>(args[i].val)));
+                    final_arg = Variable(static_cast<int64>(get<double>(args[i].val)));
                 } else if (params[i].type == DataType::Float) {
-                    final_arg = Variable(static_cast<double>(get<int>(args[i].val)));
+                    final_arg = Variable(static_cast<double>(get<int64>(args[i].val)));
                 }
             } else {
                 throw runtime_error("Invalid function call: expected " + enum_to_DataType(params[i].type) + " arguments, got " + enum_to_DataType(args[i].type));
@@ -799,17 +769,22 @@ private:
             }
 
             if (idx >= text.length()) {
-                tk = {TokenType::EndOfFile, "", cur_line};
+                tk.type = TokenType::EndOfFile;
+                tk.val = "";
+                tk.line = cur_line;
                 last_skipped_newline_count = skipped_newlines;
                 return tk;
             }
+            tk.start_idx = idx;
 
             if (text[idx] == '\'') {
                 if (idx + 2 < text.length() && text[idx + 2] == '\'' && text[idx + 1] != '\n') {
-                    tk = {TokenType::Constant, text.substr(idx, 3)};
+                    tk.type = TokenType::Constant;
+                    tk.val = text.substr(idx, 3);
                     idx += 3;
                 } else {
-                    tk = {TokenType::Undefined, string(1, text[idx])};
+                    tk.type = TokenType::Undefined;
+                    tk.val = string(1, text[idx]);
                     idx++;
                 }
             } else if (text[idx] == '"') {
@@ -829,7 +804,8 @@ private:
                 }
                 if (text[idx] == '"') parsed_string += '"';
                 if (idx < text.length()) idx++; // consume "
-                tk = {TokenType::Constant, parsed_string};
+                tk.type = TokenType::Constant;
+                tk.val = parsed_string;
             } else if (isdigit(text[idx]) || (text[idx] == '.' && idx + 1 < text.length() && isdigit(text[idx+1]))) {
                 size_t start = idx;
                 bool has_dot = false;
@@ -842,15 +818,18 @@ private:
                     idx++;
                     while (idx < text.length() && isdigit(text[idx])) idx++;
                 }
-                tk = {TokenType::Constant, text.substr(start, idx - start)};
+                tk.type = TokenType::Constant;
+                tk.val = text.substr(start, idx - start);
             } else if (isalpha(text[idx]) || text[idx] == '_') {
                 size_t start = idx;
                 while (idx < text.length() && (isalnum(text[idx]) || text[idx] == '_')) idx++;
                 string s = text.substr(start, idx - start);
                 if (s == "true" || s == "false") {
-                    tk = {TokenType::Constant, s};
+                    tk.type = TokenType::Constant;
+                    tk.val = s;
                 } else {
-                    tk = {TokenType::Identifier, s};
+                    tk.type = TokenType::Identifier;
+                    tk.val = s;
                 }
             } else {
                 bool found_two = false;
@@ -860,7 +839,8 @@ private:
                         "+=", "-=", "*=", "/=", "%=", "==", ">=", "<=", "!=", "&&", "||", "++", "--", "<<", ">>"
                     };
                     if (s2_syms.count(s2)) {
-                        tk = {TokenType::Symbol, s2};
+                        tk.type = TokenType::Symbol;
+                        tk.val = s2;
                         idx += 2;
                         found_two = true;
                     }
@@ -868,9 +848,11 @@ private:
                 if (!found_two) {
                     string s1 = string(1, text[idx]);
                     if (symbols.count(s1)) {
-                        tk = {TokenType::Symbol, s1};
+                        tk.type = TokenType::Symbol;
+                        tk.val = s1;
                     } else {
-                        tk = {TokenType::Undefined, s1};
+                        tk.type = TokenType::Undefined;
+                        tk.val = s1;
                     }
                     idx++;
                 }
@@ -878,6 +860,8 @@ private:
         }
         tk.line = cur_line;
         last_skipped_newline_count = skipped_newlines;
+
+        if (is_in(tk.val, {"do"})) assert(false);
         return tk;
     }
 public:
@@ -1070,11 +1054,18 @@ public:
         return result;
     }
 
-    void push_checkpoint() {
-        checkpoints.push_back({idx, cur_line, last_skipped_newline_count, token_ptr});
+    size_t get_token_ptr() const { return token_ptr; }
+
+    void push_checkpoint(long long override_idx = -1, int override_line = -1, long long override_token_ptr = -1) {
+        size_t save_idx = (override_idx == -1) ? idx : (size_t)override_idx;
+        int save_line = (override_line == -1) ? cur_line : override_line;
+        size_t save_token_ptr = (override_token_ptr == -1) ? token_ptr : (size_t)override_token_ptr;
+        checkpoints.push_back({save_idx, save_line, last_skipped_newline_count, save_token_ptr});
     }
 
-    void pop_checkpoint() { checkpoints.pop_back(); }
+    void pop_checkpoint() { 
+        checkpoints.pop_back(); 
+    }
 
     void back_to_checkpoint() {
         const Checkpoint &checkpoint = checkpoints.back();
@@ -1091,24 +1082,20 @@ private:
     Token prev_token = {TokenType::Undefined, ""};
     Token cur_token;
     bool require_semicolon = true;
-    const int MAX_STEPS = 100000;  
 
     int recursion_depth = 0; // 遞迴深度（暫時設為一級，需要實作到function calling）
     DataType current_return_type = DataType::Void; 
 
     bool dry_run = false; // <-- 關鍵點：跳過賦值動作
     bool is_global = true;
-
-
 /* 
     [修改] ❌void parse_function_call()
            // 修改：呼叫時的引數傳遞，需相容陣列與參照型態的傳遞。
 */
-
     void throw_error(int debug_No = 0) {
         // return "unrecognize token with first char" and "unexpected token"
         if (DEBUG) cout << "Debug mode: No. " << debug_No << endl;
-        if (cur_token.type != TokenType::Identifier && !is_in(string("") + cur_token.val[0], symbols)) {
+        if (cur_token.type == TokenType::Undefined && !is_in(string("") + cur_token.val[0], symbols)) {
             throw runtime_error("Line " + to_string(cur_token.line) + " : unrecognized token with first char '" + cur_token.val[0] + "'");
         } else {
             throw runtime_error("Line " + to_string(cur_token.line) + " : unexpected token '" + cur_token.val + "'");
@@ -1144,11 +1131,11 @@ private:
             next();
             
             if (auto arr_ptr = get_if<shared_ptr<ArrayType>>(&target_var->val)) {
-                int idx = 0;
-                if (auto i = get_if<int>(&index_var.val)) {
+                int64 idx = 0;
+                if (auto i = get_if<int64>(&index_var.val)) {
                     idx = *i;
                 } else if (auto d = get_if<double>(&index_var.val)) { // 可能需要處理錯誤
-                    idx = static_cast<int>(*d);
+                    idx = static_cast<int64>(*d);
                 } else {
                     // throw runtime_error("Line " + to_string(cur_token.line) + " : array index must be an integer");
                 }
@@ -1188,11 +1175,11 @@ private:
                 next();
                 
                 if (auto arr_ptr = get_if<shared_ptr<ArrayType>>(&target_var->val)) {
-                    int idx = 0;
-                    if (auto i = get_if<int>(&index_var.val)) {
+                    int64 idx = 0;
+                    if (auto i = get_if<int64>(&index_var.val)) {
                         idx = *i;
                     } else if (auto d = get_if<double>(&index_var.val)) {
-                        idx = static_cast<int>(*d);
+                        idx = static_cast<int64>(*d);
                     } else {
                         // throw runtime_error("Line " + to_string(cur_token.line) + " : array index must be an integer");
                     }
@@ -1248,8 +1235,8 @@ private:
             Variable *target_var = parse_ident_lvalue(); 
             if (!dry_run && target_var) {
                 // 套用副作用前進行類型檢查與轉型 (coerce)，確保 ++/-- 後不改變變數原始類型
-                if (op == "++") *target_var = coerce_variable(*target_var + Variable{1}, target_var->type);
-                else *target_var = coerce_variable(*target_var - Variable{1}, target_var->type);
+                if (op == "++") *target_var = coerce_variable(*target_var + Variable{(int64)1}, target_var->type);
+                else *target_var = coerce_variable(*target_var - Variable{(int64)1}, target_var->type);
             }
             
             return target_var ? *target_var : Variable();
@@ -1282,8 +1269,8 @@ private:
                     
                     if (!dry_run && lval_ptr) {
                         // 後置運算：先回傳舊值 (result)，但在背景更新儲存空間 (*lval_ptr)
-                        if (op == "++") *lval_ptr = coerce_variable(*lval_ptr + Variable{1}, lval_ptr->type);
-                        else *lval_ptr = coerce_variable(*lval_ptr - Variable{1}, lval_ptr->type);
+                        if (op == "++") *lval_ptr = coerce_variable(*lval_ptr + Variable{(int64)1}, lval_ptr->type);
+                        else *lval_ptr = coerce_variable(*lval_ptr - Variable{(int64)1}, lval_ptr->type);
                     }
                 }
             }
@@ -1404,10 +1391,7 @@ private:
         Variable result = parse_bitwise_exp();
         while (cur_token.val == "&&") {
             next();
-            bool prev_dry_run = get_dry_run();
-            if (!bool(result)) set_dry_run(true);
             Variable rhs = parse_bitwise_exp();
-            set_dry_run(prev_dry_run);
             result = result && rhs;
         }
         return result;
@@ -1418,10 +1402,7 @@ private:
         Variable result = parse_logical_and_exp();
         while (cur_token.val == "||") {
             next();
-            bool prev_dry_run = get_dry_run();
-            if (bool(result)) set_dry_run(true);
             Variable rhs = parse_logical_and_exp();
-            set_dry_run(prev_dry_run);
             result = result || rhs;
         }
         return result;
@@ -1524,20 +1505,29 @@ private:
         return result;
     }
 
-    bool parse_condition() {
+    bool parse_condition(bool force_dry_run = false) {
         // cur_token is '(' end after ')'
         // ( Expression )
-        if (cur_token.val != "(") {
-            throw_error(10);
+        bool prev_dry_run = get_dry_run();
+        if (force_dry_run) set_dry_run(true);
+
+        try {
+            if (cur_token.val != "(") {
+                throw_error(10);
+            }
+            next();
+            Variable result = parse_expression();
+            if (DEBUG && cur_token.val == ")") cout << "Debug condition: " << cur_token.val << " " << lexer.peek_token().val << endl; 
+            if (cur_token.val != ")") {
+                throw_error(11);
+            }
+            next();
+            set_dry_run(prev_dry_run);
+            return bool(result);
+        } catch (...) {
+            set_dry_run(prev_dry_run);
+            throw; // 將狀態復原後，再把例外向上拋出
         }
-        next();
-        Variable result = parse_expression();
-        if (DEBUG && cur_token.val == ")") cout << "Debug condition: " << cur_token.val << " " << lexer.peek_token().val << endl; 
-        if (cur_token.val != ")") {
-            throw_error(11);
-        }
-        next();
-        return bool(result);
     }
 
     void skip_token() {
@@ -1546,40 +1536,64 @@ private:
     }
 
     void skip_statement() {
-        // 1. 紀錄當前 dry_run 狀態，並開啟 dry_run (空轉模式)
         bool old_dry_run = get_dry_run();
         set_dry_run(true);
 
-        // 2. 建立臨時的作用域 (Environment)
-        // 這是為了防止略過區塊內的宣告（例如: if (false) int x=1; ）污染外層環境
         auto old_env = cur_env;
         cur_env = make_shared<Environment>(old_env);
 
         try {
-            // 3. 呼叫現有的解析邏輯！
-            // 因為 dry_run = true，所以它會走過所有的 token、檢查語法、檢查變數是否存在，
-            // 但不會執行任何變數賦值、也不會進入真正的無窮迴圈。
             parse_statement(false); 
         } catch (...) {
-            // 如果在空轉過程中發現語法錯誤，或是未定義變數 (如 Line 43 的 temp)
-            // 將環境復原後向外拋出
             cur_env = old_env;
             set_dry_run(old_dry_run);
-            throw; // 關鍵：此時主 Lexer 的指標精準停在引發錯誤的那顆 Token 上！
+            throw; // 此時主 Lexer 的指標精準停在引發錯誤的那顆 Token 上！
         }
 
-        // 4. 解析結束，安然無恙地復原環境與狀態
         cur_env = old_env;
         set_dry_run(old_dry_run);
     }
 
+    void parse_scoped_statement(bool reset_after_statement = true) {
+        // 預讀當前的 Token，判斷接下來是要解析 Block 還是單行 Statement
+        if (cur_token.val == "{") {
+            // 情況 A：這是一個 Block '{ ... }'
+            // 交給 parse_statement，其內部的 parse_block() 會自行處理 Environment 切換
+            parse_statement(reset_after_statement);
+        } else {
+            // 情況 B：這是一行單獨的 Statement (例如 int x = 1; 或 x++;)
+            // 手動加上「隱形的作用域」來防止變數污染
+            auto old_env = cur_env;
+            cur_env = make_shared<Environment>(old_env);
+            
+            try {
+                parse_statement(reset_after_statement);
+            } catch (...) {
+                cur_env = old_env;
+                throw;
+            }
+            
+            cur_env = old_env;
+        }
+    }
+
     void parse_if_else() {
         // start at "if", end after "}"
+        if (!dry_run) {
+            Token old_prev = prev_token;
+            lexer.push_checkpoint(cur_token.start_idx, cur_token.line, lexer.get_token_ptr() > 0 ? lexer.get_token_ptr() - 1 : 0);
+            skip_statement();
+            lexer.back_to_checkpoint();
+            lexer.pop_checkpoint();
+            cur_token = lexer.get_next_token();
+            prev_token = old_prev;
+        }
+
         bool condition_met = false;
         next();
         bool condition = parse_condition();
         if (condition) {
-            parse_statement(false);
+            parse_scoped_statement(false);
             condition_met = true;
         } else {
             skip_statement();
@@ -1589,16 +1603,17 @@ private:
             next();
             if (cur_token.val == "if") {
                 next();
-                condition = parse_condition();
+                condition = parse_condition(condition_met);
+
                 if (!condition_met && condition) {
-                    parse_statement(false);
+                    parse_scoped_statement(false);
                     condition_met = true;
                 } else {
                     skip_statement();
                 }
             } else {
                 if (!condition_met) {
-                    parse_statement(false);
+                    parse_scoped_statement(false);
                     condition_met = true;
                 } else {
                     skip_statement();
@@ -1610,26 +1625,48 @@ private:
 
     void parse_while() {
         // start at "while", end after "}"
+        if (!dry_run) {
+            Token old_prev = prev_token;
+            lexer.push_checkpoint(cur_token.start_idx, cur_token.line, lexer.get_token_ptr() > 0 ? lexer.get_token_ptr() - 1 : 0);
+            skip_statement();
+            lexer.back_to_checkpoint();
+            lexer.pop_checkpoint();
+            cur_token = lexer.get_next_token();
+            prev_token = old_prev;
+        }
+
         bool condition;
         if (cur_token.val == "while") {
-            lexer.push_checkpoint();
+            lexer.push_checkpoint(); // 借出 Checkpoint
             next();
             condition = parse_condition();
-            if (!condition) {
+            
+            if (dry_run) {
                 skip_statement();
+                lexer.pop_checkpoint();
+                return;
             }
-            int execution_steps = 0;
-            while (condition && execution_steps <= MAX_STEPS) {
-                execution_steps++;
-                parse_statement(false);
-                lexer.back_to_checkpoint();
-                next();
-                condition = parse_condition();
-                if (!condition || execution_steps > MAX_STEPS) {
-                    skip_statement();
+
+            if (!condition) skip_statement();
+            
+            // 加入 try-catch 保護層
+            try {
+                while (condition) {
+                    parse_scoped_statement(false);
+                    lexer.back_to_checkpoint();
+                    next();
+                    condition = parse_condition();
+                    if (!condition) {
+                        skip_statement();
+                    }
                 }
+            } catch (...) {
+                // 攔截到 ReturnException，先清理 Checkpoint，再將例外向上拋出
+                lexer.pop_checkpoint();
+                throw;
             }
-            lexer.pop_checkpoint();
+            
+            lexer.pop_checkpoint(); // 迴圈正常結束，清理 Checkpoint
         } else {
             throw_error(17);
         }
@@ -1637,34 +1674,71 @@ private:
 
     void parse_do_while() {
         // start at "do", end after ";"
+        if (!dry_run) {
+            Token old_prev = prev_token;
+            lexer.push_checkpoint(cur_token.start_idx, cur_token.line, lexer.get_token_ptr() > 0 ? lexer.get_token_ptr() - 1 : 0);
+            skip_statement();
+            lexer.back_to_checkpoint();
+            lexer.pop_checkpoint();
+            cur_token = lexer.get_next_token();
+            prev_token = old_prev;
+        }
+
         bool condition;
         if (cur_token.val == "do") {
-            lexer.push_checkpoint(); // 從do後面開始
+            lexer.push_checkpoint(); // 借出 Checkpoint
             next();
 
-            int execution_steps = 0;
-            do {
-                execution_steps++;
+            if (dry_run) {
                 bool old_is_global = is_global;
                 is_global = false;
-                parse_statement(false);
+                skip_statement();
                 is_global = old_is_global;
+                
                 if (cur_token.val != "while") {
                     throw_error(18);
                 }
                 next();
                 condition = parse_condition();
+                
                 if (cur_token.val != ";") throw_error(19);
-                // 關鍵修改：這裡不再消耗 ';'，保留到statement解析中
-                if (condition && execution_steps <= MAX_STEPS) {
-                    lexer.back_to_checkpoint();
+                next(); // 修正問題 3：確實消耗掉殘留的 ';'
+                
+                lexer.pop_checkpoint();
+                return;
+            }
+
+            // 加入 try-catch 保護層
+            try {
+                do {
+                    bool old_is_global = is_global;
+                    is_global = false;
+                    parse_scoped_statement(false);
+                    is_global = old_is_global;
+                    
+                    if (cur_token.val != "while") {
+                        throw_error(18);
+                    }
                     next();
-                } else {
-                    // 不消耗 next(); 留給 statement 處理
-                    break;
-                }
-            } while (true);
-            lexer.pop_checkpoint();
+                    condition = parse_condition();
+                    
+                    if (cur_token.val != ";") throw_error(19);
+                    
+                    if (condition) {
+                        lexer.back_to_checkpoint();
+                        next();
+                    } else {
+                        next(); // Skip the ;
+                        break;
+                    }
+                } while (true);
+            } catch (...) {
+                // 攔截到 ReturnException，清理狀態再丟出
+                lexer.pop_checkpoint();
+                throw;
+            }
+            
+            lexer.pop_checkpoint(); // 正常結束清理
         } else {
             throw_error(20);
         }
@@ -1694,10 +1768,14 @@ private:
         }
         cur_env = cur_env->parent;
     }
-    void parse_function_block(const vector<Token> &tokens, unordered_map<string, Variable> formatted_params) {
+    // 回傳執行完後的 param 值（用於 ref writeback）
+    // out_final_params: 無論正常結束還是 ReturnException 都會填入最終參數值
+    unordered_map<string, Variable> parse_function_block(const vector<Token> &tokens, unordered_map<string, Variable> formatted_params, unordered_map<string, Variable> *out_final_params = nullptr) {
         // start at "{", end at "}"
         // CompoundStatement : '{' { LocalDeclaration | Statement } '}'
-        auto new_env = make_shared<Environment>(cur_env);
+        // 函數的 env parent 指向 global_env（靜態作用域語義），而非呼叫方的局部 env
+        auto saved_env = cur_env;
+        auto new_env = make_shared<Environment>(global_env);
         cur_env = new_env;
         for (auto &param : formatted_params) {
             cur_env->declare(param.first, param.second);
@@ -1705,6 +1783,17 @@ private:
 
         Parser block_parser(tokens);
         block_parser.current_return_type = this->current_return_type;
+
+        // 輔助 lambda：讀取 cur_env 中的 param 最終值
+        auto read_final = [&]() {
+            unordered_map<string, Variable> result;
+            for (auto &param : formatted_params) {
+                if (cur_env->ident_table.count(param.first)) {
+                    result[param.first] = cur_env->ident_table[param.first];
+                }
+            }
+            return result;
+        };
 
         try {
             if (block_parser.cur_token.val == "{") {
@@ -1714,11 +1803,22 @@ private:
                     block_parser.parse_statement(false);
                 }
             }
+        } catch (ReturnException &re) {
+            // return 語句：先讀最終值再 pop env，然後重新拋出
+            auto final_p = read_final();
+            if (out_final_params) *out_final_params = final_p;
+            cur_env = saved_env;
+            throw; // 重新拋出 ReturnException
         } catch (...) {
-            cur_env = cur_env->parent;
+            // 其他例外
+            cur_env = saved_env;
             throw;
         }
-        cur_env = cur_env->parent;
+        // 正常結束：讀出最終值
+        auto final_p = read_final();
+        if (out_final_params) *out_final_params = final_p;
+        cur_env = saved_env;
+        return final_p;
     }
     vector<StatePair> parse_variable_declaration(DataType type) {
         // start at ident, end at ";"
@@ -1748,8 +1848,8 @@ private:
                 next(); // move to '['
                 next(); // move to expression start
                 Variable size_var = parse_expression();
-                int size = -1;
-                if (auto i = get_if<int>(&size_var.val)) {
+                int64 size = -1;
+                if (auto i = get_if<int64>(&size_var.val)) {
                     size = *i;
                 }
                 if (cur_token.val != "]") {
@@ -1788,7 +1888,7 @@ private:
         auto parse_a_param = [&]() -> void {
             DataType type = DataType_to_enum(cur_token.val);
             next(); // move to ident
-            int size = -1;
+            int64 size = -1;
             bool is_ref = false;
             if (cur_token.val == "&") {
                 is_ref = true;
@@ -1800,7 +1900,7 @@ private:
                 if (cur_token.val == "[") {
                     next(); // move to size
                     Variable size_var = parse_expression();
-                    if (auto i = get_if<int>(&size_var.val)) {
+                    if (auto i = get_if<int64>(&size_var.val)) {
                         size = *i;
                     } else {
                         throw_error(25);
@@ -1866,8 +1966,8 @@ private:
         DataType old_return_type = current_return_type;
         current_return_type = type;
         
-        // 建立一個臨時的作用域，把函數參數放進去，避免 dry_run 報出 "未定義變數"
-        auto temp_env = make_shared<Environment>(cur_env);
+        // 建立一個臨時的作用域（parent 指向 global_env），把函數參數放進去，避免 dry_run 報出 "未定義變數"
+        auto temp_env = make_shared<Environment>(global_env);
         for (const auto& p : params) {
             temp_env->declare(p.name, Variable(p.type, p.size));
         }
@@ -1890,35 +1990,68 @@ private:
             }
             next(); // 離開 '}'
         } catch (ReturnException &re) {
-             // 如果在 try 內拋出 return_exception 代表語法大致正確走到結尾，我們依然因為不在執行器內，所以當成語法正確處理
-             // 但正常 parse_statement 解析 return 應該要接得住，如果漏出來這裡就捕捉避免錯誤
+            // 文法正確 捕捉return避免錯誤
         } catch (...) {
-            // 語法有錯或未定義變數拋出 Exception！
-            // 拋棄掉所有我們設定好的東西，並把錯誤丟到最外面製造連鎖崩潰效應
             is_global = old_is_global;
             dry_run = old_dry_run;
             current_return_type = old_return_type;
             cur_env = parent_env;
-            lexer.pop_checkpoint(); // 因為拋出例外放棄註冊，我們直接丟棄這個 checkpoint，不退回！
-            throw; // 再次丟出！讓 parse_wrapper 接收
+            lexer.pop_checkpoint(); 
+            throw; 
         }
         is_global = old_is_global;
-        
-        // 走到這裡代表 function block 裡面沒有任何語法錯誤！安全！
         dry_run = old_dry_run;
         current_return_type = old_return_type;
         cur_env = parent_env;
         
         // 將 lexer 退回大括號的起點
         lexer.back_to_checkpoint();
-        lexer.pop_checkpoint(); // 用完即丟
+        lexer.pop_checkpoint();
         
-        // 這次我們可以安心地把整包抓出來當庫存
         vector<Token> tokens = lexer.get_a_block();
         cur_token = lexer.get_next_token(); // 同步下一顆 token
         
         func_table[name] = Function{type, params, tokens, has_void};
         return {name + "()", state}; // 輸入至註冊表時不需顯示參數
+    }
+
+    // 同時回傳每個 arg 對應的外部變數名稱（單純 ident 才有，否則為空字串）
+    pair<vector<Variable>, vector<string>> parse_function_params_with_names() {
+        // start at '(', end after ')'
+        vector<Variable> params;
+        vector<string> arg_names; // 對應外部變數名稱（for ref writeback）
+        if (cur_token.val == "(") {
+            next();
+            if (cur_token.val == ")") {
+                next();
+                return {params, arg_names};
+            } else {
+                auto parse_one = [&]() {
+                    // 嘗試偵測是否為單純 ident（不含 [] 或 ++/-- 等副作用）
+                    string arg_name = "";
+                    if (cur_token.type == TokenType::Identifier) {
+                        Token peek = lexer.peek_token(1);
+                        if (peek.val == "," || peek.val == ")") {
+                            arg_name = cur_token.val;
+                        }
+                    }
+                    params.push_back(parse_conditional_exp());
+                    arg_names.push_back(arg_name);
+                };
+                parse_one();
+                while (cur_token.val == ",") {
+                    next();
+                    parse_one();
+                }
+                if (cur_token.val != ")") {
+                    throw_error(30);
+                }
+                next();
+            }
+        } else {
+            throw_error(31);
+        }
+        return {params, arg_names};
     }
 
     vector<Variable> parse_function_params() {
@@ -1954,7 +2087,7 @@ private:
         Token function_token = cur_token;
         string function_name = cur_token.val;
         next();
-        vector<Variable> params = parse_function_params();
+        auto [params, arg_names] = parse_function_params_with_names();
         
         // 在輸入數量不符的參數時一律不執行也不報錯
         if (function_name == "ListAllVariables") {
@@ -1973,10 +2106,24 @@ private:
             DataType old_return_type = current_return_type;
             current_return_type = func_table[function_name].return_type;
             if (!dry_run) {
+                unordered_map<string, Variable> final_params;
+                const auto &func_params = func_table[function_name].params;
+                auto do_ref_writeback = [&]() { // 函數階段結束時將引用的參數寫回傳入參數
+                    for (int i = 0; i < (int)func_params.size(); i++) {
+                        if ((func_params[i].is_ref || func_params[i].size != -1) && i < (int)arg_names.size() && !arg_names[i].empty()) {
+                            Variable *ext_var = cur_env->get(arg_names[i]);
+                            if (ext_var && final_params.count(func_params[i].name)) {
+                                *ext_var = final_params.at(func_params[i].name);
+                            }
+                        }
+                    }
+                };
                 try {
-                    parse_function_block(func_table[function_name].tokens, formatted_params);
+                    parse_function_block(func_table[function_name].tokens, formatted_params, &final_params);
+                    do_ref_writeback(); // 正常結束：執行 writeback
                 } catch (ReturnException &re) {
-                    current_return_type = old_return_type; 
+                    current_return_type = old_return_type;
+                    do_ref_writeback(); // return 語句：也執行 writeback
                     return re.value;
                 }
             }
@@ -2254,7 +2401,7 @@ void Done() {
 }
 
 void parse_wrapper(Parser &parser) {
-      while (!parser.is_eof()) {
+    while (!parser.is_eof()) {
         try {
             parser.parse_cmd();
         } catch (const exception &e) {
@@ -2271,7 +2418,6 @@ void parse_wrapper(Parser &parser) {
 int main() {
     cout << fixed << setprecision(3);
     global_env->global_init();
-    cout << "Our-C running ..." << endl;
 
 	string content, _; // 跳過測試
     cin >> _; // 忽略標題
@@ -2280,7 +2426,8 @@ int main() {
     while (cin.get(c)) {
         content += c;
     }
-
+    
+    cout << "Our-C running ..." << endl;
     Parser parser(content);
     parse_wrapper(parser);
     return 0;

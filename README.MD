@@ -19,7 +19,7 @@
 ## How to Compile
 
 ```bash
-g++ -o p4.exe p4.cpp
+g++ p4.cpp -o p4.exe
 ```
 
 ## How to Run

@@ -47,6 +47,8 @@ struct Token {
     string val;
     int line = 1;
     int column = 1;
+    size_t start_idx = 0;
+    size_t end_idx = 0;
 };
 
 struct Node {
@@ -145,6 +147,13 @@ private:
         return dot_count == 1 && digit_count > 0;
     }
 
+    void throw_eol_error() {
+        int err_col = (int)idx - token_line[cur_line - 1] + 1;
+        string err = "ERROR (no closing quote) : END-OF-LINE encountered at Line " +
+                     to_string(cur_line) + " Column " + to_string(err_col);
+        throw runtime_error(err);
+    }
+
     Token get_a_token() {
         while (idx < text.length()) {
             if (isspace(text[idx])) {
@@ -168,31 +177,30 @@ private:
         }
 
         if (idx >= text.length()) {
-            return Token{TokenType::EndOfFile, "", cur_line, (int)idx - token_line[cur_line - 1] + 1};
+            return Token{TokenType::EndOfFile, "", cur_line, (int)idx - token_line[cur_line - 1] + 1, idx, idx};
         }
 
+        size_t start_idx = idx;
         int col = (int)idx - token_line[cur_line - 1] + 1;
 
         if (text[idx] == '(') {
             idx++;
-            return Token{TokenType::LEFT_PAREN, "(", cur_line, col};
+            return Token{TokenType::LEFT_PAREN, "(", cur_line, col, start_idx, idx};
         }
         if (text[idx] == ')') {
             idx++;
-            return Token{TokenType::RIGHT_PAREN, ")", cur_line, col};
+            return Token{TokenType::RIGHT_PAREN, ")", cur_line, col, start_idx, idx};
         }
         if (text[idx] == '\'') {
             idx++;
-            return Token{TokenType::QUOTE, "'", cur_line, col};
+            return Token{TokenType::QUOTE, "'", cur_line, col, start_idx, idx};
         }
 
         if (text[idx] == '"') {
             string val = "\"";
             idx++;
             while (idx < text.length() && text[idx] != '"') {
-                if (text[idx] == '\n') {
-                    return Token{TokenType::Undefined, "no closing quote", cur_line, col};
-                }
+                if (text[idx] == '\n') throw_eol_error();
                 if (text[idx] == '\\') {
                     idx++;
                     if (idx < text.length()) {
@@ -206,7 +214,7 @@ private:
                         }
                         idx++;
                     } else {
-                        return Token{TokenType::Undefined, "no closing quote", cur_line, col};
+                        throw_eol_error();
                     }
                 } else {
                     val += text[idx];
@@ -216,9 +224,9 @@ private:
             if (idx < text.length() && text[idx] == '"') {
                 val += "\"";
                 idx++;
-                return Token{TokenType::STRING, val, cur_line, col};
+                return Token{TokenType::STRING, val, cur_line, col, start_idx, idx};
             } else {
-                return Token{TokenType::Undefined, "no closing quote", cur_line, col};
+                throw_eol_error();
             }
         }
 
@@ -233,22 +241,22 @@ private:
         }
 
         if (val == ".") {
-            return Token{TokenType::DOT, val, cur_line, col};
+            return Token{TokenType::DOT, val, cur_line, col, start_idx, idx};
         }
         if (val == "nil" || val == "#f") {
-            return Token{TokenType::NIL, val, cur_line, col};
+            return Token{TokenType::NIL, val, cur_line, col, start_idx, idx};
         }
         if (val == "t" || val == "#t") {
-            return Token{TokenType::T, val, cur_line, col};
+            return Token{TokenType::T, val, cur_line, col, start_idx, idx};
         }
         if (is_valid_int(val)) {
-            return Token{TokenType::INT, val, cur_line, col};
+            return Token{TokenType::INT, val, cur_line, col, start_idx, idx};
         }
         if (is_valid_float(val)) {
-            return Token{TokenType::FLOAT, val, cur_line, col};
+            return Token{TokenType::FLOAT, val, cur_line, col, start_idx, idx};
         }
         
-        return Token{TokenType::SYMBOL, val, cur_line, col};
+        return Token{TokenType::SYMBOL, val, cur_line, col, start_idx, idx};
     }
 
 public:
@@ -272,6 +280,31 @@ public:
             token_line.push_back((int)idx);
         }
     }
+
+    void reset_pos_tracking(size_t start_idx) {
+        idx = start_idx;
+        cur_line = 1;
+        token_line = {(int)start_idx};
+    }
+
+    bool is_at_eof() {
+        size_t temp_idx = idx;
+        while (temp_idx < text.length()) {
+            if (isspace(text[temp_idx])) {
+                temp_idx++;
+            } else if (text[temp_idx] == ';') {
+                while (temp_idx < text.length() && text[temp_idx] != '\n') {
+                    temp_idx++;
+                }
+                if (temp_idx < text.length() && text[temp_idx] == '\n') {
+                    temp_idx++;
+                }
+            } else {
+                return false;
+            }
+        }
+        return true;
+    }
 };
 
 class Parser {
@@ -279,51 +312,24 @@ private:
     Lexer lexer;
     Token cur_token;
     shared_ptr<Node> root;
+    size_t prev_end_idx = 0;
+    bool need_next_token = true;
 
     void next() {
+        prev_end_idx = cur_token.end_idx;
         cur_token = lexer.get_next_token();
     }
 
-    void throw_runtime_error(const string &msg) {
-        throw runtime_error(msg);
-    }
-
-    void throw_eof_error() {
-        throw_runtime_error("ERROR (no more input) : END-OF-FILE encountered");
-    }
-
-    void throw_no_closing_quote_error(int line, int col) {
-        string err = "ERROR (no closing quote) : END-OF-LINE encountered at Line " +
-                     to_string(line) + " Column " + to_string(col);
-        throw_runtime_error(err);
-    }
-
-    void throw_lexer_error(const Token &tk) {
-        if (tk.val == "no closing quote") {
-            throw_no_closing_quote_error(tk.line, tk.column);
-        } else {
-            throw_runtime_error("ERROR (lexer error) : unknown error");
-        }
-    }
-
     void throw_unexpected_error(const Token &tk, const string &expected) {
-        if (tk.type == TokenType::Undefined) {
-            throw_lexer_error(tk);
-            return;
-        }
         if (tk.type == TokenType::EndOfFile) {
-            throw_eof_error();
-            return;
+            throw runtime_error("ERROR (no more input) : END-OF-FILE encountered");
         }
         string err = "ERROR (unexpected token) : " + expected + " expected when token at Line " +
                      to_string(tk.line) + " Column " + to_string(tk.column) + " is >>" + tk.val + "<<";
-        throw_runtime_error(err);
+        throw runtime_error(err);
     }
 
     shared_ptr<Node> parse_s_exp_internal() {
-        if (cur_token.type == TokenType::Undefined) {
-            throw_lexer_error(cur_token);
-        }
         if (cur_token.type == TokenType::EndOfFile) {
             throw_unexpected_error(cur_token, "atom or '('");
         }
@@ -380,30 +386,45 @@ private:
 
 public:    
     Parser(const string &input) : lexer(input) {
-        cur_token = lexer.get_next_token();
+        prev_end_idx = 0;
+        need_next_token = true;
     }
 
     shared_ptr<Node> parse_s_exp() {
-        if (cur_token.type == TokenType::Undefined) {
-            throw_lexer_error(cur_token);
+        if (need_next_token) {
+            cur_token = lexer.get_next_token();
+            need_next_token = false;
         }
         if (cur_token.type == TokenType::EndOfFile) {
-            throw_eof_error();
+            throw runtime_error("ERROR (no more input) : END-OF-FILE encountered");
         }
         return parse_s_exp_internal();
     }
 
-    bool is_eof() const {
+    bool is_eof() {
+        if (need_next_token) {
+            return lexer.is_at_eof();
+        }
         return cur_token.type == TokenType::EndOfFile;
     }
 
     void recover_after_error() {
         lexer.skip_to_newline();
-        cur_token = lexer.get_next_token();
+        lexer.reset_pos_tracking(lexer.get_idx());
+        need_next_token = true;
+    }
+
+    void reset_for_next_s_exp() {
+        lexer.reset_pos_tracking(prev_end_idx);
+        need_next_token = true;
     }
 };
 
 // ========================================Built-in Functions========================================
+
+
+
+// ========================================Helper Functions========================================
 
 void print_s_exp(shared_ptr<Node> node, int indent, bool first_on_line) {
     if (node == nullptr) return;
@@ -507,6 +528,7 @@ void parse_wrapper(Parser &parser) {
             }
             print_s_exp(root, 0, false);
             cout << endl; // Prints a blank line after output
+            parser.reset_for_next_s_exp();
         } catch (const exception &e) {
             cout << e.what() << endl;
             parser.recover_after_error();

@@ -1,0 +1,294 @@
+================================================================================
+OurScheme 語法分析、AST 構建與詞法/語法元素完整分析手冊
+================================================================================
+
+本文件基於 OurScheme 的規格書（HowToWriteOurScheme.pdf, OurSchemeIntro.pdf, 
+OurSchemeProj1.pdf）以及 p1.cpp 的部分實作內容進行完整且詳盡的分析，整理出 
+EBNF 文法表、AST 建樹指南、各元素分析方法與錯誤恢復機制。
+
+--------------------------------------------------------------------------------
+目錄
+--------------------------------------------------------------------------------
+一、OurScheme EBNF 完整文法表與詞法規則
+二、AST 構建與建樹指南 (AST Construction Guide)
+三、各元素的完整分析方法與實作剖析 (Element-wise Analysis)
+    1. 詞法分析 (Lexical Analysis)
+    2. 行列追蹤機制 (Line & Column Tracking)
+    3. 語法分析 (Syntactic Analysis)
+    4. 輸出格式化列印 (Pretty Printing)
+四、錯誤處理與恢復機制 (Error Handling & Recovery)
+
+================================================================================
+一、OurScheme EBNF 完整文法表與詞法規則
+================================================================================
+
+1. EBNF 語法規則 (EBNF Grammar Rules)
+--------------------------------------
+<S-exp> ::= <ATOM> 
+          | LEFT-PAREN <S-exp> { <S-exp> } [ DOT <S-exp> ] RIGHT-PAREN
+          | QUOTE <S-exp>
+
+<ATOM>  ::= SYMBOL 
+          | INT 
+          | FLOAT 
+          | STRING 
+          | NIL 
+          | T 
+          | LEFT-PAREN RIGHT-PAREN
+
+2. 詞法元素定義 (Terminal Tokens Definition)
+--------------------------------------------
+* LEFT-PAREN  : 左括號，字面值為 '('
+* RIGHT-PAREN : 右括號，字面值為 ')'
+* QUOTE       : 單引號，字面值為 '\''，作為 (quote ...) 的簡寫
+* DOT         : 點符號，字面值為 '.'。僅在「獨立存在」且作為分隔符時被視為 DOT，
+                否則可能為 FLOAT 或 SYMBOL 的一部分。
+* NIL         : 空值/假值，字面值為 'nil' 或 '#f' (必須為全小寫，NIL 或 #F 視為 SYMBOL)。
+* T           : 真值，字面值為 't' 或 '#t' (必須為全小寫，T 或 #T 視為 SYMBOL)。
+* INT         : 整數，格式為選擇性的正負號後接一或多個數字。
+                - Regular Expression: [+-]?[0-9]+
+                - 範例: 123, +123, -123
+* FLOAT       : 浮點數，格式為選擇性的正負號，且「必須且僅包含一個小數點」，並至少有一位數字。
+                - Regular Expression: [+-]?[0-9]*\.[0-9]* (但總數字量須大於0)
+                - 範例: 123.567, 123., .567, +.567, -.123
+* STRING      : 字串，以雙引號 '"' 開頭與結尾，且「不可跨行」。
+                - 支援 C/Java 風格的轉義字元（但僅限以下五種）：
+                  1. '\n' -> 換行 (ASCII 10)
+                  2. '\t' -> 水平定位 (ASCII 9)
+                  3. '\"' -> 雙引號 (ASCII 34)
+                  4. '\\' -> 反斜線 (ASCII 92)
+                - 若反斜線 '\' 後接其他字元（例如 '\a'），則此第一層反斜線無特殊逃逸意義，
+                  會直接保留反斜線本身及該字元（即包含 '\' 與 'a' 兩個字元）。
+* SYMBOL      : 符號，連續的可列印字元序列，且滿足以下條件：
+                - 不能是數字（INT 或 FLOAT）
+                - 不能是字串 (STRING)
+                - 不能是 '#t'、'#f'、't'、'nil'
+                - 不能包含分隔符（'('、')'、'\''、'"'、';'、空白/換行）
+                - 區分大小寫 (Case-sensitive)。例如: abc, a-B!c?, !??, 3.25a 均為 SYMBOL。
+
+3. 分隔符定義 (Separators)
+--------------------------
+與其他 Lisp/Scheme 類似，以下字元在字串外部具有分隔 Token 的作用：
+(a) 一或多個空白、跳格、換行符號 (Whitespace)
+(b) 左括號 '(' (其本身即為一個 Token)
+(c) 右括號 ')' (其本身即為一個 Token)
+(d) 單引號 '\'' (其本身即為一個 Token)
+(e) 雙引號 '"' (標示字串的開始與結束)
+(f) 分號 ';' (標示行註解的開始)
+
+4. 行註解處理 (Line Comments)
+-----------------------------
+* 行註解以分號 ';' 開始，持續到該行結束 (END-OF-LINE)。
+* 詞法分析器在讀取 S-exp 時必須忽略並跳過所有行註解。
+* 範例：'ab;b' 會被拆解為 SYMBOL 'ab' 與行註解 ';b'。
+
+================================================================================
+二、AST 構建與建樹指南 (AST Construction Guide)
+================================================================================
+
+OurScheme 將所有語法元素組織成一棵二元樹（稱為 Cons-Cell Tree）。
+在 C++ 實作中，節點結構定義如下：
+
+```cpp
+struct Node {
+    TokenType type;                                         
+    variant<monostate, int64, double, bool, string> val;    
+    shared_ptr<Node> car;                                   
+    shared_ptr<Node> cdr;                                   
+};
+```
+
+1. Atom 節點 (Atom Node)
+------------------------
+* 類型包括：INT, FLOAT, STRING, NIL, T, SYMBOL。
+* 結構特徵：`car == nullptr` 且 `cdr == nullptr`。
+* `val` 成員使用 `std::variant` 來安全地儲存轉換後的型別：
+  - INT: 轉換並存為 `int64` (long long)
+  - FLOAT: 轉換並存為 `double`
+  - NIL: 存為 `bool` 值 `false`，字面值為 "nil" 或 "#f"
+  - T: 存為 `bool` 值 `true`，字面值為 "t" 或 "#t"
+  - STRING / SYMBOL: 存為原始的 `string`
+
+2. 空列表 () 或 ( )
+--------------------
+* 在 OurScheme 中，空列表 `()` 與 `nil` 是等價的。
+* AST 構建規則：**不建立 CONS 節點，直接返回一個 NIL Atom 節點。**
+  ```
+  [ NIL Atom (val = false) ]
+  ```
+
+3. 單引號語法 'S (Quoted S-Expression)
+--------------------------------------
+* 單引號語法 `'S` 在語義上完全等價於 `(quote S)`。
+* AST 構建規則：建立一個 CONS 節點：
+  - `car` 指向 SYMBOL Atom "quote" 的節點。
+  - `cdr` 指向另一個 CONS 節點，其 `car` 為 `S` 的 AST 根節點，`cdr` 為 NIL Atom 節點。
+* AST 結構圖：
+  ```
+        [ CONS ]
+        /      \
+    [quote]   [ CONS ]
+              /      \
+            [S]      [nil]
+  ```
+
+4. 標準列表 (List) (S1 S2 ... Sn)
+---------------------------------
+* 列表是由多個 CONS 節點串接而成的單向鏈表，最後以 NIL Atom 結尾。
+* AST 構建規則：
+  - 建立一個 CONS 節點作為當前元素 `Si` 的封裝，`car` 指向 `Si`。
+  - `cdr` 指向包裹下一元素 `Si+1` 的 CONS 節點。
+  - 最後一個元素 `Sn` 的 CONS 節點，其 `cdr` 指向 NIL Atom 節點。
+* AST 結構圖：
+  ```
+        [ CONS ] -> [ CONS ] -> ... -> [ CONS ]
+         /           /                   /    \
+       [S1]        [S2]                [Sn]   [nil]
+  ```
+
+5. 點對 (Dotted Pair) (S1 S2 ... Sn . S_last)
+----------------------------------------------
+* 點對的結構與標準列表非常相似，唯一區別是最後一個 CONS 節點的 `cdr` 指向自訂的 S-expression `S_last`，而非 NIL Atom。
+* AST 構建規則：
+  - 建立鏈式的 CONS 節點，`car` 分別指向 `S1`, `S2`, ..., `Sn`。
+  - 最後一個 CONS 節點的 `cdr` 指向 `S_last` 的 AST 根節點。
+* AST 結構圖：
+  ```
+        [ CONS ] -> [ CONS ] -> ... -> [ CONS ]
+         /           /                   /    \
+       [S1]        [S2]                [Sn]   [S_last]
+  ```
+
+================================================================================
+三、各元素的完整分析方法與實作剖析 (Element-wise Analysis)
+================================================================================
+
+1. 詞法分析 (Lexical Analysis)
+------------------------------
+詞法分析器 (Lexer) 負責將輸入字串切分為 Token 流，主要實作剖析如下：
+
+* **跳過空白與註解**：
+  在讀取下一個 Token 前，透過迴圈跳過所有的空白字元（包含 `\n` 與 `\t`）及分號 `;` 引導的整行註解。
+  當遇到換行符 `\n` 時，必須更新行數追蹤。
+
+* **合法性檢查算法 (Validation)**：
+  - `is_valid_int(const string &s)`: 
+    檢查首字元是否為 `+` 或 `-`，其餘字元必須皆為 `isdigit()`。
+  - `is_valid_float(const string &s)`: 
+    檢查首字元是否為 `+` 或 `-`，統計小數點數 `dot_count` 必須剛好為 1，且數字字元數 `digit_count` 必須大於 0。
+
+* **最長匹配原則 (Longest Match Preferred)**：
+  當讀取非特定單一字元符號（如 `(`, `)`, `'`）時，Lexer 應持續向後讀取字元直到遇見「分隔符 (Separator)」，
+  藉此保證如輸入 `How` 時會被正確識別為一個 SYMBOL Token `How`，而不是拆成 `H` 或 `Ho` 等等。
+
+* **字串解析與轉義處理**：
+  以雙引號 `"` 開頭的 Token 進入字串處理流程：
+  - 持續讀取字元直到遇到閉合雙引號 `"`。
+  - 遇到 `\` 時，檢查其後繼字元：如果是 `n`、`t`、`"`、`\` 則進行對應轉義轉換。若為其他字元，則保留 `\` 並將其與後繼字元一併寫入字串值。
+  - 若在字串未閉合前遇到換行 `\n` 或 EOF，則拋出無閉合引號錯誤。
+
+2. 行列追蹤機制 (Line & Column Tracking)
+----------------------------------------
+精確的錯誤定位要求對 Token 的行號 (Line) 與列號 (Column) 進行即時追蹤。
+
+* **核心追蹤架構**：
+  - `cur_line`：整數，記錄當前的行號（從 1 開始）。
+  - `token_line`：`std::vector<int>`，儲存「每一行起始字元在整個 input text 中的索引位置」。
+    - 預設初始化為 `{0}`，代表第 1 行從 index 0 開始。
+    - 每當 Lexer 掃描到 `\n` 時，將其下一字元索引 `idx + 1` 存入 `token_line` 中，並使 `cur_line` 遞增。
+
+* **列號計算公式**：
+  對於任意 Token，其起始字元在 text 中的索引為 `start_idx`，此 Token 所在的列號（1-indexed）計算如下：
+  ```cpp
+  int col = start_idx - token_line[cur_line - 1] + 1;
+  ```
+  此公式能動態且高效率地根據行起點算出當前 Token 的精確列位置。
+
+* **指令重置與行列初始化規則**：
+  在互動式或多指令環境下，當一個 S-expression 成功解析並印出後，下一條指令的起點追蹤必須重新計算：
+  - 規則：在 legal input 之後（同一行內），必須出現「下一個 input S-expression 的有效字元」，該行才算作下一個 input 的第一行。如果成功解析後，同一行的剩餘部分只出現「空白、Tab 或註解」，則這一行不算作下一個 input 的第一行，下一條指令的行號追蹤將在下一行重新開始計算 (Line 1, Column 1)。
+  - 實作上，`reset_pos_tracking(size_t start_idx)` 函數會從前一個 S-exp 的結束位置開始掃描，若跳過空白與註解後遇到 `\n`，則重置 `cur_line = 1`，且將 `token_line` 更新為以 `\n` 後的索引為起點。否則，若在同一行內即有有效字元，則列號追蹤會相對於前一個 Token 的結尾進行精準對齊。
+
+3. 語法分析 (Syntactic Analysis)
+--------------------------------
+語法分析器 (Parser) 採用遞迴下降法 (Recursive Descent Parsing)：
+
+* `parse_s_exp()` 為入口點，初始化 Token。
+* `parse_s_exp_internal()` 核心遞迴函數：
+  - **Atom / Quote**：
+    - 若遇到一般 Atom Token，建立對應節點並向後前進一個 Token。
+    - 若遇到 QUOTE `'`，遞迴調用 `parse_s_exp_internal()` 解析子表達式，並封裝成 `(quote sub)`。
+  - **括號與列表遞迴**：
+    - 遇到左括號 `(`：
+      - 前進 Token，若立刻遇到右括號 `)`，則返回 NIL Atom 代表空列表 `()`。
+      - 否則，遞迴解析第一個元素作為 `car`，並建立第一個 CONS 節點。
+      - 進入迴圈解析後續元素，將其用 CONS 節點包裝，串聯到前一個 CONS 節點的 `cdr` 上。
+      - **點對處理 (Dot Handling)**：
+        在迴圈中，若遇到 `DOT` Token：
+        1. 前進 Token，遞迴解析緊接其後的一個 S-expression。
+        2. 將此 S-expression 直接賦值給當前 CONS 節點的 `cdr`。
+        3. 接著「必須」立即遇到右括號 `)`，若不是則拋出異常 `ERROR (unexpected token) : ')' expected...`。
+      - 迴圈結束時，必須檢查並前進右括號 `)`。若中途遭遇 EOF，則拋出無閉合括號錯誤。
+
+4. 輸出格式化列印 (Pretty Printing)
+-----------------------------------
+輸出的 Pretty Print 具有嚴格的縮排與格式規範，以 `print_s_exp(node, indent, first_on_line)` 遞迴實作：
+
+* **Atom 列印規範**：
+  - 如果 `first_on_line` 為 true，先印出 `indent` 個空格。
+  - 浮點數 (FLOAT) 必須強制輸出至小數點後三位（例如：使用 C++ 的 `fixed` 與 `setprecision(3)`）。
+  - `NIL` / `()` / `#f` 一律印出為 `nil`。
+  - `T` / `t` / `#t` 一律印出為 `#t`。
+  - 字串或符號等 Atom 依其原始內容印出，隨後輸出一個換行 `\n`。
+
+* **CONS 節點 (List / Dotted Pair) 列印規範**：
+  - 如果 `first_on_line` 為 true，先印出 `indent` 個空格。
+  - 印出 `( ` (注意後面有一個空格)，然後遞迴印出首個元素 `car`（其 `first_on_line` 設為 false，因為與 `( ` 同行）。
+  - 對於列表的後續元素，沿著 `cdr` 鏈向後遍歷：
+    - 每一個後續元素都必須單獨換行，且在遞迴印出時將 `first_on_line` 設為 true，並傳入縮排 `indent + 2`。
+  - **點對點符號列印**：
+    - 若遍歷到最後，發現 `cdr` 不是一個 NIL 節點，代表其為點對 (Dotted Pair)。
+    - 必須在單獨一行印出縮排 `indent + 2` 及點符號加換行 `.\n`。
+    - 隨後在下一行遞迴印出 `cdr` 的內容，同樣使用 `indent + 2` 縮排。
+  - **結束括號對齊**：
+    - 整個列表/點對列印完畢後，在單獨一行印出與該層起點對齊的 `indent` 個空格，然後印出右括號 `)\n`。
+  - **注意**：輸出的所有行後面皆不能有任何尾隨的空白字元 (no trailing spaces or tabs)。
+
+================================================================================
+四、錯誤處理與恢復機制 (Error Handling & Recovery)
+================================================================================
+
+1. 四大語法錯誤 (Syntax Errors)
+-------------------------------
+OurScheme Project 1 規範了四種精確的語法錯誤訊息：
+
+1. **非預期 Token (預期 Atom 或左括號)**:
+   - 觸發時機：在預期需要一個表達式（S-exp）的地方，讀到了不合法的 Token（如右括號 `)` 或點符號 `.`）。
+   - 格式：`ERROR (unexpected token) : atom or '(' expected when token at Line X Column Y is >>[TokenValue]<<`
+2. **非預期 Token (預期右括號)**:
+   - 觸發時機：在點對表達式中，DOT 與後續的一個 S-exp 解析完成後，沒有立即讀到右括號 `)`。
+   - 格式：`ERROR (unexpected token) : ')' expected when token at Line X Column Y is >>[TokenValue]<<`
+3. **無閉合引號錯誤 (String EOL)**:
+   - 觸發時機：字串 Token 尚未讀到結束的雙引號 `"` 便遭遇了換行 `\n` 或系統 EOF。
+   - 格式：`ERROR (no closing quote) : END-OF-LINE encountered at Line X Column Y`
+4. **輸入終止錯誤 (EOF)**:
+   - 觸發時機：當 Parser 試圖讀取下一個表達式，但輸入串已完全耗盡。
+   - 格式：`ERROR (no more input) : END-OF-FILE encountered`
+
+2. 錯誤恢復策略 (Error Recovery Strategy)
+----------------------------------------
+為保證 Interpreter 在遇到 syntax error 時不會崩潰，且能繼續處理下一行輸入，系統實作了強健的錯誤恢復機制：
+
+* **錯誤捕捉**：
+  主迴圈 `parse_wrapper` 使用 `try-catch` 包裹整個 `parse_s_exp()` 與輸出流程。
+  一旦擷取到 `runtime_error` 異常，立即印出錯誤訊息，並啟動 `recover_after_error()`。
+
+* **恢復跳過與重置**：
+  - 呼叫 `lexer.skip_to_newline()`：Lexer 開始向後掃描字元，直接忽略並跳過當前出錯行剩餘的所有內容，直到遇見換行符 `\n`。
+  - 呼叫 `lexer.reset_pos_tracking(lexer.get_idx())`：將行號、列號及定位點初始化。使下一行開頭重新作為 Line 1, Column 1 開始進行詞法解析。
+  - 設定 `need_next_token = true`，使 Parser 在下一次嘗試解析時會重新從 Lexer 獲取全新的起點 Token。
+================================================================================
+如果在同一行（例如多條指令在同一行），行列追蹤則相對於前一個 Token 的結尾來精準計算。
+如果跨越了換行符號，下一條指令的行數追蹤將在下一行重新開始計算。
+函數呼叫一律先檢查參數數量，建樹後再分別檢查是否為 unbound symbol ，類型等等
+執行時才檢查函數內部實作(的函數部分)

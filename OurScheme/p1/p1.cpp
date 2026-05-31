@@ -29,7 +29,7 @@ template <class... Ts> struct overloaded : Ts... { using Ts::operator()...; };
 template <class... Ts> overloaded(Ts...) -> overloaded<Ts...>;
 */
 
-// ========================================definition========================================
+// ========================================Declarations========================================
 
 struct Token;
 class Lexer;
@@ -52,10 +52,12 @@ struct Token {
 };
 
 struct Node {
-    TokenType type;                                         
-    variant<monostate, int64, double, bool, string> val;    // 如果是 Atom，存放字串或數字內容，
-    shared_ptr<Node> car;                                   // 當前token的內容指向佐子樹
-    shared_ptr<Node> cdr;                                   // 剩餘內容指向柚子樹
+    // 如果是 Atom，存放字串或數字內容，
+    // 當前token的內容指向佐子樹，剩餘內容指向柚子樹
+    TokenType type;
+    variant<monostate, int64, double, bool, string> val;
+    shared_ptr<Node> car;
+    shared_ptr<Node> cdr;
 
     // Default constructor
     Node() : type(TokenType::Undefined), val(monostate{}), car(nullptr), cdr(nullptr) {}
@@ -86,7 +88,7 @@ const unordered_set<string> symbols = {
 
 const unordered_set<string> keywords = ([]{
     unordered_set<string> s = {
-        "exit", "nil", "#f", "t", "#t",
+        "nil", "#f", "t", "#t",
     };
     s.insert(symbols.begin(), symbols.end());
     return s;
@@ -147,11 +149,11 @@ private:
         return dot_count == 1 && digit_count > 0;
     }
 
-    void throw_eol_error() {
+    Token make_eol_error_token(int col, size_t start_idx) {
         int err_col = (int)idx - token_line[cur_line - 1] + 1;
         string err = "ERROR (no closing quote) : END-OF-LINE encountered at Line " +
                      to_string(cur_line) + " Column " + to_string(err_col);
-        throw runtime_error(err);
+        return Token{TokenType::Undefined, err, cur_line, col, start_idx, idx};
     }
 
     Token get_a_token() {
@@ -200,7 +202,7 @@ private:
             string val = "\"";
             idx++;
             while (idx < text.length() && text[idx] != '"') {
-                if (text[idx] == '\n') throw_eol_error();
+                if (text[idx] == '\n') return make_eol_error_token(col, start_idx);
                 if (text[idx] == '\\') {
                     idx++;
                     if (idx < text.length()) {
@@ -214,7 +216,7 @@ private:
                         }
                         idx++;
                     } else {
-                        throw_eol_error();
+                        return make_eol_error_token(col, start_idx);
                     }
                 } else {
                     val += text[idx];
@@ -226,7 +228,7 @@ private:
                 idx++;
                 return Token{TokenType::STRING, val, cur_line, col, start_idx, idx};
             } else {
-                throw_eol_error();
+                return make_eol_error_token(col, start_idx);
             }
         }
 
@@ -282,9 +284,31 @@ public:
     }
 
     void reset_pos_tracking(size_t start_idx) {
-        idx = start_idx;
-        cur_line = 1;
-        token_line = {(int)start_idx};
+        size_t temp_idx = start_idx;
+        while (temp_idx < text.length()) {
+            if (isspace(text[temp_idx])) {
+                if (text[temp_idx] == '\n') {
+                    break;
+                }
+                temp_idx++;
+            } else if (text[temp_idx] == ';') {
+                while (temp_idx < text.length() && text[temp_idx] != '\n') {
+                    temp_idx++;
+                }
+            } else {
+                break;
+            }
+        }
+        if (temp_idx < text.length() && text[temp_idx] == '\n') {
+            temp_idx++;
+            idx = temp_idx;
+            cur_line = 1;
+            token_line = {(int)temp_idx};
+        } else {
+            idx = temp_idx;
+            cur_line = 1;
+            token_line = {(int)start_idx};
+        }
     }
 
     bool is_at_eof() {
@@ -330,6 +354,9 @@ private:
     }
 
     shared_ptr<Node> parse_s_exp_internal() {
+        if (cur_token.type == TokenType::Undefined) {
+            throw runtime_error(cur_token.val);
+        }
         if (cur_token.type == TokenType::EndOfFile) {
             throw_unexpected_error(cur_token, "atom or '('");
         }
@@ -402,9 +429,6 @@ public:
     }
 
     bool is_eof() {
-        if (need_next_token) {
-            return lexer.is_at_eof();
-        }
         return cur_token.type == TokenType::EndOfFile;
     }
 
@@ -535,6 +559,7 @@ void parse_wrapper(Parser &parser) {
             if (parser.is_eof()) {
                 break;
             }
+            cout << endl;
         }
     }
     

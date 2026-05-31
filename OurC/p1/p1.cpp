@@ -99,7 +99,7 @@ string enum_to_DataType(int type) {
     }
 }
 
-// ========================================Non-Variable Function Definition========================================
+// ========================================Non-Variable Function Declarations========================================
 bool is_float(double num);
 bool is_in(const string& op, const unordered_set<string> targets);
 string trim(const string& s);
@@ -482,7 +482,7 @@ unordered_map<TokenType, vector<TokenType>> unexpected_types = {
     {TokenType::Undefined, {}},
 };
 
-// ========================================Variable Function Definition========================================
+// ========================================Variable Function Declarations========================================
 
 vector<string> split_by_semicolon(const string& content);
 variable convert_to_var(const token tk);

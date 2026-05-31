@@ -27,7 +27,7 @@ bool DEBUG = false;
 template <class... Ts> struct overloaded : Ts... { using Ts::operator()...; };
 template <class... Ts> overloaded(Ts...) -> overloaded<Ts...>;
 
-// ========================================definition========================================
+// ========================================Declarations========================================
 
 const double ErrorValue = 1e-9;
 
@@ -1879,7 +1879,7 @@ private:
         return state_pairs;
     }
 
-    vector<FunctionParam> parse_function_declaration_params(bool &has_void) {
+    vector<FunctionParam> parse_function_definition_params(bool &has_void) {
         has_void = false;
         // start at "(", end after ")"
         // <Params> ::= ( <Type> <Ident> { , <Type> <Ident> } | <Empty> | <VOID> )
@@ -1946,7 +1946,7 @@ private:
         return params;
     }
 
-    StatePair parse_function_declaration(DataType type) {
+    StatePair parse_function_definition(DataType type) {
         // start at ident, next token is "("
         // FunctionDefinition           : '(' [ VOID | FormalParameters ] ')' CompoundStatement
         // Example: (int a, float b[5]) { ... }
@@ -1957,7 +1957,7 @@ private:
         next(); // move to "("
 
         bool has_void = false;
-        vector<FunctionParam> params = parse_function_declaration_params(has_void);
+        vector<FunctionParam> params = parse_function_definition_params(has_void);
         
         // 1. 在輸入函數定義時先將函數名稱跟參數表填入function table中 (允許遞迴呼叫)
         func_table[name] = Function{type, params, {}, has_void};
@@ -2198,8 +2198,8 @@ private:
             if (cur_token.type != TokenType::Identifier) throw_error(33);
             if (lexer.peek_token().val == "(") {
                 if (!is_global) throw_error(42); // FunctionDefinition only in GlobalDefinition
-                // 實作: Function Declaration 以Ident進入function / type ident "("
-                return_states.push(parse_function_declaration(type_map.at(type_token.val)));
+                // 實作: Function Definition 以Ident進入function / type ident "("
+                return_states.push(parse_function_definition(type_map.at(type_token.val)));
                 require_semicolon = false;
             } else {
                 if (type_token.val == "void") throw_error(43); // VariableDeclaration must use DataType (no VOID)

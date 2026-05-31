@@ -1,12 +1,10 @@
 q1 AC
-q2 
-q3 
-q4 
-q5 
-q6 
-q7 
-q8 
-q9 
-q10 
-q11 
-q12 
+q2 AC
+q3 AC
+q4 AC
+q5 AC
+q6 AC
+q7 AC
+q8 AC
+q9 AC
+q10 AC

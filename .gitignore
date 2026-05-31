@@ -10,3 +10,4 @@ dummy.cpp
 .antigravitycli
 test_system
 spec
+*.md

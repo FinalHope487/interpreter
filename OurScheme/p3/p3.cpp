@@ -577,6 +577,10 @@ shared_ptr<Node> eval(const shared_ptr<Node> &node, const shared_ptr<Environment
             env->bindings[name] = val;
             cout << name << " defined" << endl;
             return nullptr;
+        } else if (symbol == "let") { 
+            
+        } else if (symbol == "lambda") { 
+            
         } else if (symbol == "quote") {
             if (!is_pure_list(node)) {
                 throw runtime_error("ERROR (non-list) : " + pretty_print(node));

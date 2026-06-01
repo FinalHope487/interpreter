@@ -1,6 +1,7 @@
-# OurC interpreter
+# OurC & OurScheme interpreter
 
 完整的 OurC 直譯器程式，已經完全通過 Project 4，僅做為紀錄之用
+OurScheme WIP
 
 請勿下載程式在提交系統上測試，不管改了多少內容
 

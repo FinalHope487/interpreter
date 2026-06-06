@@ -18,6 +18,8 @@
 #include <vector>
 #include <functional>
 
+const bool DEBUG = false;
+
 using namespace std;
 using int64 = long long;
 
@@ -25,6 +27,26 @@ template <class... Ts> struct overloaded : Ts... { using Ts::operator()...; };
 template <class... Ts> overloaded(Ts...) -> overloaded<Ts...>;
 
 // ========================================Forward Declarations and Types========================================
+
+const unordered_map<string, pair<size_t, bool>> built_in_functions_info = {
+    {"+", {2, true}}, {"-", {2, true}}, {"*", {2, true}}, {"/", {2, true}},
+    {"cons", {2, false}}, {"car", {1, false}}, {"cdr", {1, false}},
+    {"list", {0, true}}, // list 接受 0 個以上的參數
+    {"atom?", {1, false}}, {"pair?", {1, false}}, {"list?", {1, false}},
+    {"null?", {1, false}}, {"integer?", {1, false}}, {"real?", {1, false}},
+    {"number?", {1, false}}, {"string?", {1, false}}, {"boolean?", {1, false}},
+    {"symbol?", {1, false}}, {"not", {1, false}},
+    {">", {2, true}}, {">=", {2, true}}, {"<", {2, true}}, {"<=", {2, true}}, {"=", {2, true}},
+    {"string-append", {2, true}}, {"string>?", {2, true}}, {"string<?", {2, true}}, {"string=?", {2, true}},
+    {"eqv?", {2, false}}, {"equal?", {2, false}},
+    {"clean-environment", {0, false}}, {"exit", {0, false}}
+};
+
+const unordered_set<string> keywords = {
+    "nil", "#f", "t", "#t", "quote", "define", "set!", "let", "cond", "lambda", "if", "and", "or"
+};
+
+unordered_map<string, pair<size_t, bool>> user_defined_functions_info;
 
 enum TokenType {
     LEFT_PAREN, RIGHT_PAREN, INT, STRING, DOT, FLOAT, NIL, T, QUOTE, SYMBOL, CONS, EndOfFile, Undefined,
@@ -42,7 +64,19 @@ struct Function {
     bool is_ge;
     function<shared_ptr<Node>(const vector<shared_ptr<Node>> &)> func;
 
-    Function(const string &n, function<shared_ptr<Node>(const vector<shared_ptr<Node>> &)> f) : name(n), func(f) {}
+    Function(const string &n, function<shared_ptr<Node>(const vector<shared_ptr<Node>> &)> f) 
+        : name(n), func(f) {
+        auto it = built_in_functions_info.find(n);
+        if (it != built_in_functions_info.end()) {
+            expected_count = it->second.first;
+            is_ge = it->second.second;
+        } else {
+            throw runtime_error("ERROR (unexpected behavior) : " + n);
+        }
+    }
+
+    Function(const string &n, size_t ec, function<shared_ptr<Node>(const vector<shared_ptr<Node>> &)> f) 
+        : name(n), expected_count(ec), is_ge(false), func(f) {}
 };
 
 using PossibleTypes = variant<monostate, int64, double, bool, char, string, Function>;
@@ -82,6 +116,7 @@ struct Environment {
 // ========================================Function Declarations========================================
 
 bool is_in(const string &op, const unordered_set<string> &targets);
+string to_upper(const string &s);
 void check_params_count_and_type(const string &func_name, const vector<shared_ptr<Node>> &args, size_t expected_count, 
                                  const unordered_set<TokenType> &expected_types, bool is_ge = false);
 bool is_pure_list(const shared_ptr<Node> &node);
@@ -104,29 +139,7 @@ void parse_wrapper(Parser &parser);
 
 // ========================================Global Variables and Maps========================================
 
-bool DEBUG = false;
-
 shared_ptr<Environment> global_env;
-shared_ptr<Environment> cur_env = global_env;
-
-const unordered_set<string> keywords = {
-    "nil", "#f", "t", "#t", "quote", "define", "set!", "let", "cond", "lambda", "if", "and", "or"
-};
-
-const unordered_map<string, pair<size_t, bool>> built_in_functions_info = {
-    {"+", {2, true}}, {"-", {2, true}}, {"*", {2, true}}, {"/", {2, true}},
-    {"cons", {2, false}}, {"car", {1, false}}, {"cdr", {1, false}},
-    {"list", {0, true}}, // list 接受 0 個以上的參數
-    {"atom?", {1, false}}, {"pair?", {1, false}}, {"list?", {1, false}},
-    {"null?", {1, false}}, {"integer?", {1, false}}, {"real?", {1, false}},
-    {"number?", {1, false}}, {"string?", {1, false}}, {"boolean?", {1, false}},
-    {"symbol?", {1, false}}, {"not", {1, false}},
-    {">", {2, true}}, {">=", {2, true}}, {"<", {2, true}}, {"<=", {2, true}}, {"=", {2, true}},
-    {"string-append", {2, true}}, {"string>?", {2, true}}, {"string<?", {2, true}}, {"string=?", {2, true}},
-    {"eqv?", {2, false}}, {"equal?", {2, false}}
-};
-
-unordered_map<string, pair<size_t, bool>> user_defined_functions_info;
 
 const unordered_map<string, Function> built_in_functions = {
     {"+", Function("+", [](const vector<shared_ptr<Node>> &args) -> shared_ptr<Node> {
@@ -267,18 +280,37 @@ const unordered_map<string, Function> built_in_functions = {
         return is_equal(args[0], args[1]) ? make_shared<Node>(TokenType::T, "t") : make_shared<Node>(TokenType::NIL, "nil");
     })},
     {"clean-environment", Function("clean-environment", [](const vector<shared_ptr<Node>> &args) -> shared_ptr<Node> {
-        throw runtime_error("ERROR (incorrect number of arguments) : clean-environment");
+        if (args.size() != 0) {
+            throw runtime_error("ERROR (incorrect number of arguments) : clean-environment");
+        }
+        global_env->bindings.clear();
+        for (auto const &[name, func] : built_in_functions) {
+            auto func_node = make_shared<Node>();
+            func_node->type = TokenType::Undefined;
+            func_node->val = func;
+            global_env->bindings[name] = func_node;
+        }
+        cout << "environment cleaned" << endl;
+        return nullptr;
     })},
     {"exit", Function("exit", [](const vector<shared_ptr<Node>> &args) -> shared_ptr<Node> {
-        throw runtime_error("ERROR (incorrect number of arguments) : exit");
+        if (args.size() != 0) {
+            throw runtime_error("ERROR (incorrect number of arguments) : exit");
+        }
+        cout << endl << "Thanks for using OurScheme!" << endl;
+        exit(0);
     })}
 };
-
-unordered_map<string, Function> user_defined_functions;
 
 // ========================================Helper Functions Implementation========================================
 
 bool is_in(const string &str, const unordered_set<string> &targets) { return targets.find(str) != targets.end(); }
+
+string to_upper(const string &s) {
+    string result = s;
+    transform(result.begin(), result.end(), result.begin(), ::toupper);
+    return result;
+}
 
 void check_params_count_and_type(const string &func_name, const vector<shared_ptr<Node>> &args, size_t expected_count, const unordered_set<TokenType> &expected_types, bool is_ge) {
     if (!is_ge && args.size() != expected_count) {
@@ -526,6 +558,57 @@ void print_s_exp(const shared_ptr<Node> &root) {
     cout << pretty_print(root) << endl;
 }
 
+// ========================================Validator and Error Handling========================================
+
+namespace Validator {
+
+void throw_non_list_error(const shared_ptr<Node> &node, const int debug_num) { throw runtime_error("ERROR (non-list) : " + pretty_print(node) + (DEBUG ? to_string(debug_num) : "")); }
+void throw_format_error(const string &context, const shared_ptr<Node> &node, const int debug_num) {throw runtime_error("ERROR (" + context + " format) : " + pretty_print(node) + (DEBUG ? to_string(debug_num) : "")); }
+void throw_format_error(const string &context, const string &detail, const int debug_num) { throw runtime_error("ERROR (" + context + " format) : " + detail + (DEBUG ? to_string(debug_num) : "")); }
+void throw_incorrect_arg_count_error(const string &func_name, const int debug_num) { throw runtime_error("ERROR (incorrect number of arguments) : " + func_name + (DEBUG ? to_string(debug_num) : "")); }
+void throw_level_error(const string &keyword, const int debug_num) { throw runtime_error("ERROR (level of " + keyword + ")" + (DEBUG ? to_string(debug_num) : "")); }
+void throw_unbound_symbol_error(const string &name, const int debug_num) { throw runtime_error("ERROR (unbound symbol) : " + name + (DEBUG ? to_string(debug_num) : "")); }
+void throw_unbound_test_condition_error(const shared_ptr<Node> &node, const int debug_num) { throw runtime_error("ERROR (unbound test-condition) : " + pretty_print(node) + (DEBUG ? to_string(debug_num) : "")); }
+void throw_unbound_condition_error(const shared_ptr<Node> &node, const int debug_num) { throw runtime_error("ERROR (unbound condition) : " + pretty_print(node) + (DEBUG ? to_string(debug_num) : "")); }
+void throw_unbound_parameter_error(const shared_ptr<Node> &node, const int debug_num) { throw runtime_error("ERROR (unbound parameter) : " + pretty_print(node) + (DEBUG ? to_string(debug_num) : "")); }
+void throw_no_return_value_error(const shared_ptr<Node> &node, const int debug_num) { throw runtime_error("ERROR (no return value) : " + pretty_print(node) + (DEBUG ? to_string(debug_num) : "")); }
+void throw_attempt_to_apply_non_function(const string &name, const int debug_num) { throw runtime_error("ERROR (attempt to apply non-function) : " + name + (DEBUG ? to_string(debug_num) : "")); }
+
+void validate_pure_list(const shared_ptr<Node> &node) { 
+    if (!is_pure_list(node)) { throw_non_list_error(node, 0); } 
+}
+
+void validate_args_length(const shared_ptr<Node> &node, int min_count, int max_count, const string &context) {
+    int len = get_list_length(node->cdr);
+    if (len < min_count || max_count != -1 && len > max_count) {
+        static const unordered_set<string> arg_count_errors = {
+            "quote", "clean-environment", "exit", "if", "begin", "and", "or"
+        };
+        if (arg_count_errors.find(context) != arg_count_errors.end()) {
+            throw_incorrect_arg_count_error(context, 101);
+        } else {
+            throw_format_error(to_upper(context), node, 102);
+        }
+    }
+}
+
+string validate_and_get_symbol(const shared_ptr<Node> &node, const string &context, const shared_ptr<Node> &err_node, bool print_name_on_primitive = false) {
+    if (node == nullptr || node->type != TokenType::SYMBOL) {
+        throw_format_error(to_upper(context), err_node, 103);
+    }
+    string name = get<string>(node->val);
+    if (is_system_primitive(name)) {
+        if (print_name_on_primitive) {
+            throw_format_error(to_upper(context), name, 104);
+        } else {
+            throw_format_error(to_upper(context), err_node, 105);
+        }
+    }
+    return name;
+}
+
+} // namespace Validator
+
 // ========================================Core Interpreter Implementation========================================
 
 shared_ptr<Node> eval(const shared_ptr<Node> &node, const shared_ptr<Environment> &env, bool is_top_level) {
@@ -540,102 +623,222 @@ shared_ptr<Node> eval(const shared_ptr<Node> &node, const shared_ptr<Environment
                 if (it != cur_node->bindings.end()) return it->second;
                 cur_node = cur_node->parent;
             }
-            throw runtime_error("ERROR (unbound symbol) : " + symbol_name);
+            Validator::throw_unbound_symbol_error(symbol_name, 1);
         }
         return node;
     }
     
-    if (!is_pure_list(node)) {
-        throw runtime_error("ERROR (non-list) : " + pretty_print(node));
-    }
+    Validator::validate_pure_list(node);
     
     auto first = node->car;
     if (first == nullptr) {
-        throw runtime_error("ERROR (attempt to apply non-function) : nil");
+        Validator::throw_attempt_to_apply_non_function("nil", 2);
     }
     
     if (first->type == TokenType::SYMBOL) {
         string symbol = get<string>(first->val);
         if (symbol == "define") {
+            // 區別變數和函數宣告：變數宣告為 (define var exp)，函數宣告為 (define (func args) exp)
             if (!is_top_level) {
-                throw runtime_error("ERROR (level of DEFINE)");
-            }
-            if (!is_pure_list(node)) {
-                throw runtime_error("ERROR (non-list) : " + pretty_print(node));
+                Validator::throw_level_error("DEFINE", 3);
             }
             int len = get_list_length(node->cdr);
             shared_ptr<Node> symbol_node = (len >= 1) ? node->cdr->car : nullptr;
-            shared_ptr<Node> exp_node = (len >= 2) ? node->cdr->cdr->car : nullptr;
-            if (len != 2 || symbol_node == nullptr || symbol_node->type != TokenType::SYMBOL || is_system_primitive(get<string>(symbol_node->val))) {
-                throw runtime_error("ERROR (DEFINE format) : " + pretty_print(node));
+            if (symbol_node == nullptr) {
+                Validator::throw_format_error("DEFINE", node, 4);
             }
-            string name = get<string>(symbol_node->val);
-            auto val = eval(exp_node, env, false);
-            if (val == nullptr) {
-                throw runtime_error("ERROR (no return value) : " + pretty_print(exp_node));
+
+            if (symbol_node->type == TokenType::CONS) {
+                // 函數宣告
+                if (len < 2) {
+                    Validator::throw_format_error("DEFINE", node, 5);
+                }
+                if (!is_pure_list(symbol_node)) {
+                    Validator::throw_format_error("DEFINE", node, 6);
+                }
+                string func_name = Validator::validate_and_get_symbol(symbol_node->car, "DEFINE", node);
+                vector<string> params;
+                shared_ptr<Node> cur_param_node = symbol_node->cdr;
+                shared_ptr<Node> params_list = cur_param_node;
+                while (cur_param_node != nullptr && cur_param_node->type == TokenType::CONS) {
+                    string param_name = Validator::validate_and_get_symbol(cur_param_node->car, "DEFINE", node, true);
+                    params.push_back(param_name);
+                    cur_param_node = cur_param_node->cdr;
+                }
+                if (cur_param_node != nullptr && cur_param_node->type != TokenType::NIL) {
+                    Validator::throw_format_error("DEFINE", node, 7);
+                }
+                
+                auto def_env = env;
+                auto captured_params = params_list;
+                auto captured_body = node->cdr->cdr;
+                
+                auto cpp_func = [def_env, captured_params, captured_body](const vector<shared_ptr<Node>> &eval_args) -> shared_ptr<Node> {
+                    auto run_env = make_shared<Environment>(def_env);
+                    auto cur_param = captured_params;
+                    for (size_t i = 0; i < eval_args.size(); ++i) {
+                        string param_name = get<string>(cur_param->car->val);
+                        run_env->bindings[param_name] = eval_args[i];
+                        cur_param = cur_param->cdr;
+                    }
+                    shared_ptr<Node> last_val = nullptr;
+                    auto cur_body = captured_body;
+                    while (cur_body != nullptr && cur_body->type == TokenType::CONS) {
+                        last_val = eval(cur_body->car, run_env, false);
+                        cur_body = cur_body->cdr;
+                    }
+                    return last_val;
+                };
+
+                size_t param_count = get_list_length(params_list);
+                Function user_func(func_name, param_count, cpp_func);
+                
+                env->bindings[func_name] = make_shared<Node>(TokenType::Undefined, user_func);
+                cout << func_name << " defined" << endl;
+                return nullptr;
+            } else if (symbol_node->type == TokenType::SYMBOL) {
+                // 變數宣告
+                if (len != 2) {
+                    Validator::throw_format_error("DEFINE", node, 8);
+                }
+                shared_ptr<Node> exp_node = node->cdr->cdr->car;
+                string name = Validator::validate_and_get_symbol(symbol_node, "DEFINE", node);
+                auto val = eval(exp_node, env, false);
+                if (val == nullptr) {
+                    Validator::throw_no_return_value_error(exp_node, 9);
+                }
+                env->bindings[name] = val;
+                cout << name << " defined" << endl;
+                return nullptr;
+            } else {
+                Validator::throw_format_error("DEFINE", node, 10);
             }
-            env->bindings[name] = val;
-            cout << name << " defined" << endl;
-            return nullptr;
         } else if (symbol == "let") { 
+            Validator::validate_pure_list(node);
+            Validator::validate_args_length(node, 2, -1, "LET");
             
+            shared_ptr<Node> bindings_node = node->cdr->car;
+            shared_ptr<Node> body_node = node->cdr->cdr;
+            
+            if (!is_pure_list(bindings_node)) {
+                Validator::throw_format_error("LET", node, 11);
+            }
+            auto cur_node = bindings_node;
+            vector<pair<string, shared_ptr<Node>>> bindings;
+            if (cur_node->type != TokenType::NIL) {
+                while (cur_node != nullptr && cur_node->type == TokenType::CONS) {
+                    auto binding = cur_node->car;
+                    if (!is_pure_list(binding) || get_list_length(binding) != 2) {
+                        Validator::throw_format_error("LET", node, 12);
+                    }
+                    string var_name = Validator::validate_and_get_symbol(binding->car, "LET", node);
+                    shared_ptr<Node> exp = binding->cdr->car;
+                    bindings.push_back({var_name, exp});
+                    cur_node = cur_node->cdr;
+                }
+            }
+            // 建立環境並綁定變數
+            auto let_env = make_shared<Environment>(env);
+            for (const auto& binding : bindings) {
+                auto val = eval(binding.second, env, false);
+                if (val == nullptr) {
+                    Validator::throw_no_return_value_error(binding.second, 13);
+                }
+                let_env->bindings[binding.first] = val;
+            }
+            // body_node 為 (exp1 exp2 ...)，回傳最後一個 exp 的值
+            if (body_node->type != TokenType::CONS) {
+                return eval(body_node, let_env, false);
+            }
+            shared_ptr<Node> last_val = nullptr;
+            auto cur_body_node = body_node;
+            while (cur_body_node->type == TokenType::CONS) {
+                last_val = eval(cur_body_node->car, let_env, false);
+                cur_body_node = cur_body_node->cdr;
+            }
+            return last_val;
         } else if (symbol == "lambda") { 
+            Validator::validate_pure_list(node);
+            Validator::validate_args_length(node, 2, -1, "lambda");
             
+            shared_ptr<Node> params_node = node->cdr->car;
+            shared_ptr<Node> body_node = node->cdr->cdr;
+            
+            if (!is_pure_list(params_node)) {
+                Validator::throw_format_error("LAMBDA", node, 14);
+            }
+            vector<string> params;
+            shared_ptr<Node> cur_param_node = params_node;
+            if (cur_param_node->type != TokenType::NIL) {
+                while (cur_param_node != nullptr && cur_param_node->type == TokenType::CONS) {
+                    string param_name = Validator::validate_and_get_symbol(cur_param_node->car, "lambda", node);
+                    params.push_back(param_name);
+                    cur_param_node = cur_param_node->cdr;
+                }
+            }
+            
+            auto def_env = global_env; // lambda 與有名字的函數定義相同只能存取全域環境
+            auto cpp_func = [def_env, params_node, body_node](const vector<shared_ptr<Node>> &eval_args) -> shared_ptr<Node> {
+                auto run_env = make_shared<Environment>(def_env);
+                auto cur_param = params_node;
+                for (size_t i = 0; i < eval_args.size(); ++i) {
+                    string param_name = get<string>(cur_param->car->val);
+                    run_env->bindings[param_name] = eval_args[i];
+                    cur_param = cur_param->cdr;
+                }
+                shared_ptr<Node> last_val = nullptr;
+                auto cur_body = body_node;
+                while (cur_body != nullptr && cur_body->type == TokenType::CONS) {
+                    last_val = eval(cur_body->car, run_env, false);
+                    cur_body = cur_body->cdr;
+                }
+                return last_val;
+            };
+
+            size_t param_count = get_list_length(params_node);
+            Function user_func("lambda", param_count, cpp_func);
+            return make_shared<Node>(TokenType::Undefined, user_func);
+
         } else if (symbol == "quote") {
-            if (!is_pure_list(node)) {
-                throw runtime_error("ERROR (non-list) : " + pretty_print(node));
-            }
-            int len = get_list_length(node->cdr);
-            shared_ptr<Node> arg = (len >= 1) ? node->cdr->car : nullptr;
-            if (len != 1) {
-                throw runtime_error("ERROR (incorrect number of arguments) : quote");
-            }
-            return arg;
+            Validator::validate_pure_list(node);
+            Validator::validate_args_length(node, 1, 1, "quote");
+            return node->cdr->car;
         } else if (symbol == "if") { // (if test then [else]) : if 評估 test 為真則回傳 then 的值，否則回傳 else 的值，如果跳至 else 時不存在則丟出錯誤
-            if (!is_pure_list(node)) {
-                throw runtime_error("ERROR (non-list) : " + pretty_print(node));
-            }
+            Validator::validate_pure_list(node);
+            Validator::validate_args_length(node, 2, 3, "if");
+            
             int len = get_list_length(node->cdr);
-            shared_ptr<Node> test_node = (len >= 1) ? node->cdr->car : nullptr;
-            shared_ptr<Node> then_node = (len >= 2) ? node->cdr->cdr->car : nullptr;
+            shared_ptr<Node> test_node = node->cdr->car;
+            shared_ptr<Node> then_node = node->cdr->cdr->car;
             shared_ptr<Node> else_node = (len >= 3) ? node->cdr->cdr->cdr->car : nullptr;
-            if (len < 2 || len > 3) {
-                throw runtime_error("ERROR (incorrect number of arguments) : if");
-            }
+            
             auto test_val = eval(test_node, env, false);
             if (test_val == nullptr) {
-                throw runtime_error("ERROR (unbound test-condition) : " + pretty_print(test_node));
+                Validator::throw_unbound_test_condition_error(test_node, 15);
             }
             bool condition = true;
             if (test_val->type == TokenType::NIL) {
                 condition = false;
             }
-            if (condition) {
-                return eval(then_node, env, false);
-            } else {
-                if (else_node != nullptr) {
-                    return eval(else_node, env, false);
-                } else {
-                    throw runtime_error("ERROR (no return value) : " + pretty_print(node));
-                }
-            }
+            if (condition) return eval(then_node, env, false);
+            else return (else_node != nullptr) ? eval(else_node, env, false) : nullptr;
+
         } else if (symbol == "cond") { // 比起 if 可以包含多個條件分支，每個條件分支中可以包含多個表達式，並回傳最後一個表達式的值
             if (!is_pure_list(node)) {
-                throw runtime_error("ERROR (COND format) : " + pretty_print(node));
+                Validator::throw_format_error("COND", node, 16);
             }
+            Validator::validate_args_length(node, 1, -1, "COND");
+            
             vector<shared_ptr<Node>> cond_clauses;
             auto cur_node = node->cdr;
             while (cur_node != nullptr && cur_node->type == TokenType::CONS) {
                 cond_clauses.push_back(cur_node->car);
                 cur_node = cur_node->cdr;
             }
-            if (cond_clauses.empty()) {
-                throw runtime_error("ERROR (COND format) : " + pretty_print(node));
-            }
             for (size_t i = 0; i < cond_clauses.size(); i++) {
                 if (!is_pure_list(cond_clauses[i]) || get_list_length(cond_clauses[i]) < 2 || 
                     cond_clauses[i]->type == TokenType::NIL) {
-                    throw runtime_error("ERROR (COND format) : " + pretty_print(node));
+                    Validator::throw_format_error("COND", node, 17);
                 }
             }
             for (size_t i = 0; i < cond_clauses.size(); i++) {
@@ -650,7 +853,7 @@ shared_ptr<Node> eval(const shared_ptr<Node> &node, const shared_ptr<Environment
                 } else {
                     test_val = eval(first_element, env, false);
                     if (test_val == nullptr) {
-                        throw runtime_error("ERROR (unbound test-condition) : " + pretty_print(first_element));
+                        Validator::throw_unbound_test_condition_error(first_element, 18);
                     }
                     if (test_val->type != TokenType::NIL) {
                         condition = true;
@@ -659,10 +862,6 @@ shared_ptr<Node> eval(const shared_ptr<Node> &node, const shared_ptr<Environment
                 
                 if (condition) {
                     auto rest_nodes = cond_clause->cdr;
-                    if (rest_nodes == nullptr || rest_nodes->type == TokenType::NIL) {
-                        if (test_val != nullptr) return test_val;
-                        return make_shared<Node>(TokenType::T, "t");
-                    }
                     shared_ptr<Node> last_val = nullptr;
                     auto cur_exp = rest_nodes;
                     while (cur_exp != nullptr && cur_exp->type == TokenType::CONS) {
@@ -672,15 +871,12 @@ shared_ptr<Node> eval(const shared_ptr<Node> &node, const shared_ptr<Environment
                     return last_val;
                 }
             }
-            throw runtime_error("ERROR (no return value) : " + pretty_print(node));
+            return nullptr;
         } else if (symbol == "begin") {
-            if (!is_pure_list(node)) {
-                throw runtime_error("ERROR (non-list) : " + pretty_print(node));
-            }
+            Validator::validate_pure_list(node);
+            Validator::validate_args_length(node, 1, -1, "begin");
+            
             auto cur_node = node->cdr;
-            if (cur_node == nullptr || cur_node->type == TokenType::NIL) {
-                throw runtime_error("ERROR (incorrect number of arguments) : begin");
-            }
             shared_ptr<Node> last_val = nullptr;
             while (cur_node != nullptr && cur_node->type == TokenType::CONS) {
                 last_val = eval(cur_node->car, env, false);
@@ -689,14 +885,11 @@ shared_ptr<Node> eval(const shared_ptr<Node> &node, const shared_ptr<Environment
             return last_val;
         } else if (symbol == "clean-environment") {
             if (!is_top_level) {
-                throw runtime_error("ERROR (level of CLEAN-ENVIRONMENT)");
+                Validator::throw_level_error("CLEAN-ENVIRONMENT", 19);
             }
-            if (!is_pure_list(node)) {
-                throw runtime_error("ERROR (non-list) : " + pretty_print(node));
-            }
-            if (node->cdr != nullptr && node->cdr->type != TokenType::NIL) {
-                throw runtime_error("ERROR (incorrect number of arguments) : clean-environment");
-            }
+            Validator::validate_pure_list(node);
+            Validator::validate_args_length(node, 0, 0, "clean-environment");
+            
             env->bindings.clear();
             for (auto const &[name, func] : built_in_functions) {
                 auto func_node = make_shared<Node>();
@@ -708,34 +901,28 @@ shared_ptr<Node> eval(const shared_ptr<Node> &node, const shared_ptr<Environment
             return nullptr;
         } else if (symbol == "exit") {
             if (!is_top_level) {
-                throw runtime_error("ERROR (level of EXIT)");
+                Validator::throw_level_error("EXIT", 20);
             }
-            if (!is_pure_list(node)) {
-                throw runtime_error("ERROR (non-list) : " + pretty_print(node));
-            }
-            if (node->cdr != nullptr && node->cdr->type != TokenType::NIL) {
-                throw runtime_error("ERROR (incorrect number of arguments) : exit");
-            }
+            Validator::validate_pure_list(node);
+            Validator::validate_args_length(node, 0, 0, "exit");
+            
             cout << endl << "Thanks for using OurScheme!" << endl;
             exit(0);
         } else if (symbol == "and") {
-            if (!is_pure_list(node)) {
-                throw runtime_error("ERROR (non-list) : " + pretty_print(node));
-            }
+            Validator::validate_pure_list(node);
+            Validator::validate_args_length(node, 2, -1, "and");
+            
             vector<shared_ptr<Node>> args;
             auto cur_node = node->cdr;
             while (cur_node != nullptr && cur_node->type == TokenType::CONS) {
                 args.push_back(cur_node->car);
                 cur_node = cur_node->cdr;
             }
-            if (args.size() < 2) {
-                throw runtime_error("ERROR (incorrect number of arguments) : and");
-            }
             shared_ptr<Node> val = nullptr;
             for (size_t i = 0; i < args.size(); i++) {
                 val = eval(args[i], env, false);
                 if (val == nullptr) {
-                    throw runtime_error("ERROR (unbound condition) : " + pretty_print(args[i]));
+                    Validator::throw_unbound_condition_error(args[i], 21);
                 }
                 if (val->type == TokenType::NIL) {
                     return val;
@@ -743,23 +930,20 @@ shared_ptr<Node> eval(const shared_ptr<Node> &node, const shared_ptr<Environment
             }
             return val;
         } else if (symbol == "or") {
-            if (!is_pure_list(node)) {
-                throw runtime_error("ERROR (non-list) : " + pretty_print(node));
-            }
+            Validator::validate_pure_list(node);
+            Validator::validate_args_length(node, 2, -1, "or");
+            
             vector<shared_ptr<Node>> args;
             auto cur_node = node->cdr;
             while (cur_node != nullptr && cur_node->type == TokenType::CONS) {
                 args.push_back(cur_node->car);
                 cur_node = cur_node->cdr;
             }
-            if (args.size() < 2) {
-                throw runtime_error("ERROR (incorrect number of arguments) : or");
-            }
             shared_ptr<Node> val = nullptr;
             for (size_t i = 0; i < args.size(); i++) {
                 val = eval(args[i], env, false);
                 if (val == nullptr) {
-                    throw runtime_error("ERROR (unbound condition) : " + pretty_print(args[i]));
+                    Validator::throw_unbound_condition_error(args[i], 22);
                 }
                 if (val->type != TokenType::NIL) {
                     return val;
@@ -767,39 +951,40 @@ shared_ptr<Node> eval(const shared_ptr<Node> &node, const shared_ptr<Environment
             }
             return val;
         }
-    }
-    
+    } 
+    // 非上述特殊形式則視為函數調用
     auto func_val = eval(first, env, false);
     if (func_val == nullptr) {
         if (first->type == TokenType::SYMBOL) {
-            throw runtime_error("ERROR (unbound symbol) : " + get<string>(first->val));
+            Validator::throw_unbound_symbol_error(get<string>(first->val), 23);
         } else {
-            throw runtime_error("ERROR (attempt to apply non-function) : nil");
+            Validator::throw_no_return_value_error(first, 24);
         }
     }
     if (!holds_alternative<Function>(func_val->val)) {
-        throw runtime_error("ERROR (attempt to apply non-function) : " + pretty_print(func_val));
+        Validator::throw_attempt_to_apply_non_function(pretty_print(func_val), 25);
     }
     
     Function func_object = get<Function>(func_val->val);
-    size_t expected_count = 0;
-    bool is_ge = false;
-    // 檢查參數數量是否正確
-    if (get_expected_params_info(func_object.name, expected_count, is_ge)) {
-        size_t actual_args_count = get_list_length(node->cdr);
-        if (!is_ge && actual_args_count != expected_count) {
-            throw runtime_error("ERROR (incorrect number of arguments) : " + func_object.name);
-        } else if (is_ge && actual_args_count < expected_count) {
-            throw runtime_error("ERROR (incorrect number of arguments) : " + func_object.name);
-        }
+    size_t expected_count = func_object.expected_count;
+    bool is_ge = func_object.is_ge;
+    size_t actual_args_count = get_list_length(node->cdr);
+    
+    if ((!is_ge && actual_args_count != expected_count) || (is_ge && actual_args_count < expected_count)) {
+        string err_name = func_object.name;
+        // if (err_name == "lambda" && first->type == TokenType::CONS) {
+        //     err_name = "lambda expression";
+        // }
+        Validator::throw_incorrect_arg_count_error(err_name, 26);
     }
+    
     // 檢查後確定正確才開始使用 eval 函數求值
     vector<shared_ptr<Node>> eval_args;
     auto cur_node = node->cdr;
     while (cur_node != nullptr && cur_node->type == TokenType::CONS) {
         auto arg_val = eval(cur_node->car, env, false);
         if (arg_val == nullptr) {
-            throw runtime_error("ERROR (unbound parameter) : " + pretty_print(cur_node->car));
+            Validator::throw_unbound_parameter_error(cur_node->car, 27);
         }
         eval_args.push_back(arg_val);
         cur_node = cur_node->cdr;
@@ -1160,7 +1345,18 @@ void parse_wrapper(Parser &parser) {
         try {
             auto result = eval(root, global_env, true);
             if (result != nullptr) {
-                print_s_exp(result);
+                cout << pretty_print(result) << endl;
+            } else {
+                bool is_exception = false;
+                if (root != nullptr && root->type == TokenType::CONS && root->car != nullptr && root->car->type == TokenType::SYMBOL) {
+                    string sym = get<string>(root->car->val);
+                    if (sym == "define" || sym == "clean-environment") {
+                        is_exception = true;
+                    }
+                }
+                if (!is_exception) {
+                    Validator::throw_no_return_value_error(root, 28);
+                }
             }
             cout << endl; // Prints a blank line after output
         } catch (const exception &e) {
@@ -1184,7 +1380,7 @@ int main() {
         func_node->val = func;
         global_env->bindings[name] = func_node;
     }
-    cur_env = global_env;
+
 
     string content, _;
     cin >> _; // 忽略題號
